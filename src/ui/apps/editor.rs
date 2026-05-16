@@ -691,8 +691,20 @@ fn save_to_batfs() {
                 core::ptr::write_volatile(core::ptr::addr_of_mut!(DIRTY), false);
                 core::ptr::write_volatile(core::ptr::addr_of_mut!(SAVE_ERR_LEN), 0);
             }
+            // AUDIT-DRV-H5 (2026-05-15): log file-save events.
+            // Filename only — content stays out of the audit ring.
+            crate::security::audit::record(
+                crate::security::audit::Category::Fs,
+                b"editor save OK",
+            );
         }
-        Err(e) => store_save_err(e.as_bytes()),
+        Err(e) => {
+            crate::security::audit::record(
+                crate::security::audit::Category::Fs,
+                b"editor save FAILED",
+            );
+            store_save_err(e.as_bytes());
+        }
     }
 }
 

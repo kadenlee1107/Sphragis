@@ -36,11 +36,29 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         crate::drivers::apple::layer_b_test::run();
     }
 
-    // Disable alignment checking — C binaries may use unaligned accesses
+    // Disable alignment checking — C binaries may use unaligned accesses.
+    // AUDIT-CAVE-H3 + AUDIT-MEM-H3 (2026-05-15): enable PAN
+    // (Privileged Access Never) by clearing SCTLR_EL1.SPAN (bit 23).
+    // With SPAN=0, PSTATE.PAN is auto-set on every EL0→EL1 exception
+    // entry — exactly the attack surface that matters. A kernel-side
+    // dereference of a user pointer that bypasses uaccess::copy_*_user
+    // then takes a Permission Fault and is caught by the exception
+    // handler. uaccess::copy_*_user paths must temporarily clear PAN
+    // (msr pan, #0) inside their byte loops and restore it before
+    // return — a follow-up wave wires that into the uaccess byte loop.
+    //
+    // We don't set PSTATE.PAN immediately at boot because the boot
+    // path runs at EL1 and never dereferences EL0 pointers (no caves
+    // exist yet). PAN takes effect at the first EL0→EL1 transition,
+    // which is where the protection matters.
+    //
+    // FEAT_PAN is mandatory in ARMv8.1+; both M4 and QEMU 'virt'
+    // -cpu max expose it.
     unsafe {
         let mut sctlr: u64;
         core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr);
-        sctlr &= !(1 << 1); // Clear A bit (alignment check)
+        sctlr &= !(1 << 1);  // Clear A bit (alignment check)
+        sctlr &= !(1 << 23); // Clear SPAN — enable auto-PAN on EL0-entry
         core::arch::asm!("msr sctlr_el1, {}", in(reg) sctlr);
         core::arch::asm!("isb");
     }
@@ -192,6 +210,37 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 
     // V4: probe ARMv8.5 RNDR hardware RNG and wire it into crypto::rng.
     crypto::rng::probe_hw_rng();
+
+    // AUDIT-MEM-H2 (2026-05-15): seed __stack_chk_guard from RNDR
+    // immediately after the RNG is probed. The compiler emits canary
+    // reads on every function with -Z stack-protector=all; until this
+    // call runs the canary is the predictable build-time constant
+    // 0xdead_beef_cafe_babe. Must precede any function whose epilogue
+    // checks the canary — i.e. before the first non-inlined call into
+    // any subsystem.
+    unsafe { kernel::stack_chk::seed_from_rng(); }
+
+    // AUDIT-CAVE-M1 (2026-05-15): seed the audit-chain HMAC key from
+    // RNDR now that the DRBG is up. Must precede any audit::record
+    // call so chain entries are HMAC-protected from the first event.
+    security::audit_chain::init_audit_key();
+
+    // AUDIT-CRYPTO-F7 (2026-05-15): fail-closed boot-time crypto
+    // self-tests. Run KATs for every primitive used in production
+    // BEFORE any TLS / BatFS / IPC mount. The prior pattern was to
+    // print "FAIL: <reason>" and continue, which silently shipped
+    // broken crypto. Now: any KAT failure panics — kernel halts
+    // before it can encrypt or decrypt anything with a broken
+    // primitive.
+    match crypto::run_self_tests() {
+        Ok(()) => drivers::uart::puts("  [crypto] self-tests PASS\n"),
+        Err(e) => {
+            drivers::uart::puts("  [crypto] self-test FAIL: ");
+            drivers::uart::puts(e);
+            drivers::uart::puts(" — halting (fail-closed)\n");
+            panic!("crypto self-test failed: {}", e);
+        }
+    }
 
     // DESIGN_CRYPTO.md #11+#12: seed the OTP pad with fresh true-random
     // bytes from the RNDR-backed CSPRNG. Tokens can then be dumped via

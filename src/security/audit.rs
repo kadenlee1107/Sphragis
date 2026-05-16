@@ -55,6 +55,23 @@ pub enum Category {
     /// against the region's bytes are not logged for the same
     /// rate-limit reason.
     Shm         = 13,
+    /// AUDIT-CAVE-M2 (2026-05-15): crypto subsystem events —
+    /// primitive self-test result, key rotation, AEAD failure
+    /// on persistent storage. Previously squashed into Boot or Mode.
+    Crypto      = 14,
+    /// AUDIT-CAVE-M2: network subsystem events — TLS handshake
+    /// outcome, cert-pin mismatch, CRL/OCSP revocation hit,
+    /// firewall decision. Previously logged ad-hoc as Fetch / Cave.
+    Net         = 15,
+    /// AUDIT-CAVE-M2: filesystem events — BatFS mount / wipe /
+    /// integrity-verify result. Previously squashed into Cave.
+    Fs          = 16,
+    /// AUDIT-CAVE-M2: key-rotation events. Logged whenever a
+    /// long-lived key is regenerated (master, session, etc.).
+    KeyRotate   = 17,
+    /// AUDIT-CAVE-M2: TPI-quorum operations — the operator-action
+    /// approval channel for high-consequence ops like wipe.
+    TpiOp       = 18,
 }
 
 impl Category {
@@ -73,6 +90,11 @@ impl Category {
             Category::Pipe       => "pipe",
             Category::Socket     => "sock",
             Category::Shm        => "shm",
+            Category::Crypto    => "crypto",
+            Category::Net       => "net",
+            Category::Fs        => "fs",
+            Category::KeyRotate => "keyrot",
+            Category::TpiOp     => "tpi",
         }
     }
 }
@@ -85,12 +107,18 @@ pub struct Entry {
     pub ts:   u64,
     pub cat:  u8,           // Category as raw u8 so we can const-init.
     pub mlen: u8,
+    /// AUDIT-CAVE-M3 (2026-05-15): originating cave id. 0xFFFF =
+    /// kernel context (boot, panic, scheduler). Populated by
+    /// `record()` from `cave::get_active()`. Forensic reviewers
+    /// can filter "everything done by Cave X" without doing
+    /// substring search on the message text.
+    pub cave_id: u16,
     pub msg:  [u8; MSG_LEN],
 }
 
 impl Entry {
     pub const fn empty() -> Self {
-        Entry { ts: 0, cat: 0, mlen: 0, msg: [0; MSG_LEN] }
+        Entry { ts: 0, cat: 0, mlen: 0, cave_id: 0xFFFF, msg: [0; MSG_LEN] }
     }
 }
 
@@ -192,11 +220,20 @@ pub fn record(cat: Category, msg: &[u8]) {
     }
     let slot = h % RING_CAP;
     let copy = msg.len().min(MSG_LEN);
+    // AUDIT-CAVE-M3 (2026-05-15): snapshot the active cave id at
+    // record time so each entry carries provenance independent of
+    // the message text. 0xFFFF = kernel context (cave::get_active
+    // returns usize::MAX for unset, which we map to that sentinel).
+    let cid: u16 = {
+        let a = crate::caves::cave::get_active();
+        if a == usize::MAX { 0xFFFF } else { (a as u16) & 0x7FFF }
+    };
     unsafe {
         let e = &mut RING[slot];
         e.ts = now_ticks();
         e.cat = cat as u8;
         e.mlen = copy as u8;
+        e.cave_id = cid;
         for i in 0..copy {
             let b = msg[i];
             // Allow printable ASCII + space; everything else → `?`.

@@ -3985,8 +3985,61 @@ fn sys_connect(args: [u64; 6]) -> i64 {
     crate::kernel::mm::print_num(port as usize);
     uart::puts("\n");
 
-    // TCP connect
+    // AUDIT-CAVE-H6 (2026-05-15): consult cave_policy before any
+    // outbound connect. Prior code went straight to tcp::connect /
+    // udp::send with no per-cave egress check — cave_policy was only
+    // gated at bat_https_open and the NAT/cave-shaper egress fork. A
+    // cave with the bare `net` cap could connect to any host:port
+    // without operator allowlist. Default-deny posture: cave with
+    // no policy entry gets EACCES here.
     let sock_type = unsafe { SOCKET_TYPE };
+    let proto: u8 = if sock_type == SOCK_STREAM { 6 } else { 17 };
+    let cave_name = crate::caves::cave::active_name_str();
+    let cave_id = crate::net::cave_policy::cave_id_from_name(cave_name);
+    // Render the destination IP as dotted-decimal for the host arg.
+    // For TCP, cave_policy rules can either be hostname-pinned (set
+    // up via the shell's `policy add` command) or IP-pinned. Both
+    // are matched by `matches_full`.
+    let mut host_buf = [0u8; 16];
+    let host_str = {
+        let mut n = 0;
+        for octet in [
+            ((ip >> 24) & 0xFF) as u8,
+            ((ip >> 16) & 0xFF) as u8,
+            ((ip >>  8) & 0xFF) as u8,
+            ( ip        & 0xFF) as u8,
+        ] {
+            if octet >= 100 {
+                host_buf[n] = b'0' + (octet / 100); n += 1;
+                host_buf[n] = b'0' + ((octet / 10) % 10); n += 1;
+                host_buf[n] = b'0' + (octet % 10); n += 1;
+            } else if octet >= 10 {
+                host_buf[n] = b'0' + (octet / 10); n += 1;
+                host_buf[n] = b'0' + (octet % 10); n += 1;
+            } else {
+                host_buf[n] = b'0' + octet; n += 1;
+            }
+            host_buf[n] = b'.'; n += 1;
+        }
+        n -= 1; // drop trailing dot
+        core::str::from_utf8(&host_buf[..n]).unwrap_or("")
+    };
+    if crate::net::cave_policy::check(&cave_id, host_str, port, proto)
+        == crate::net::cave_policy::Verdict::Drop
+    {
+        uart::puts("[net] connect denied by cave_policy cave=");
+        uart::puts(cave_name);
+        uart::puts(" host=");
+        uart::puts(host_str);
+        uart::puts("\n");
+        crate::security::audit::record(
+            crate::security::audit::Category::Cave,
+            b"sys_connect denied by cave_policy (default-deny)",
+        );
+        return -13; // EACCES
+    }
+
+    // TCP connect
     if sock_type == SOCK_STREAM {
         match crate::net::tcp::connect(ip, port) {
             Ok(()) => {

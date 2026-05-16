@@ -1743,16 +1743,22 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
                         CAVES[id].cave_l1_slot = slot;
                     }
                 }
-                // On allocation failure (frame-pool OOM, MAX_CAVE_PAGETABLES
-                // exhausted) we fall through with cave_l1_phys=0 — the cave
-                // still works using PRIMARY_L1, just without per-cave TLB
-                // isolation. Audit-log so the operator sees the regression.
-                if unsafe { CAVES[id].cave_l1_phys } == 0 {
-                    crate::security::audit::record(
-                        crate::security::audit::Category::Cave,
-                        b"WARN: cave L1 allocation failed; using primary TTBR0",
-                    );
-                }
+            }
+            // AUDIT-CAVE-H1 (2026-05-15): hard-fail if L1 allocation
+            // didn't take. Prior code silently fell through with
+            // cave_l1_phys=0 and switched TTBR0 to PRIMARY_L1, meaning
+            // the cave ran with NO MMU isolation against the kernel or
+            // sibling caves on PRIMARY_L1. This is foundational —
+            // refusing entry is the only fail-closed behavior.
+            //
+            // MAX_CAVE_PAGETABLES has been bumped to match MAX_CAVES
+            // (32), so this path only fires on real frame-pool OOM.
+            if unsafe { CAVES[id].cave_l1_phys } == 0 {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Cave,
+                    b"FAIL: cave L1 allocation failed; refusing entry (fail-closed)",
+                );
+                return Err("cave L1 alloc failed");
             }
         }
 
