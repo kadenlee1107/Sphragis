@@ -1967,7 +1967,11 @@ fn sys_read(args: [u64; 6]) -> i64 {
             let plen = core::ptr::read_volatile(core::ptr::addr_of!(PROC_FD_LENS[idx]));
             if plen > 0 {
                 let path_bytes = &(&(*core::ptr::addr_of!(PROC_FD_PATHS[idx])))[..plen];
-                let path_str = core::str::from_utf8_unchecked(path_bytes);
+                // AUDIT-MEM-C1 (2026-05-15): from_utf8_unchecked on bytes
+                // that originated from user-controlled openat paths is UB
+                // if any byte > 0x7F was passed. Fall back to empty string
+                // on invalid UTF-8 — proc_read will report no content.
+                let path_str = core::str::from_utf8(path_bytes).unwrap_or("");
                 let mut proc_buf = [0u8; 512];
                 let content_len = proc_read(path_str, &mut proc_buf);
                 if content_len > 0 {
@@ -1990,7 +1994,8 @@ fn sys_read(args: [u64; 6]) -> i64 {
         let mut path_buf = [0u8; 128];
         let path_len = vfs::node_path(node_idx, &mut path_buf);
         if path_len > 0 {
-            let path_str = unsafe { core::str::from_utf8_unchecked(&path_buf[..path_len]) };
+            // AUDIT-MEM-C1: see comment at PROC_FD_PATHS read above.
+            let path_str = core::str::from_utf8(&path_buf[..path_len]).unwrap_or("");
             if path_str.starts_with("/proc") {
                 let mut proc_buf = [0u8; 512];
                 let proc_len = proc_read(path_str, &mut proc_buf);
@@ -2189,7 +2194,14 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
 
     if has_dotdot(path) { return EACCES; }
 
-    let path_str = unsafe { core::str::from_utf8_unchecked(path) };
+    // AUDIT-MEM-C1 (2026-05-15): path bytes come from read_user_str
+    // which accepts any byte != NUL. from_utf8_unchecked would make
+    // every downstream string operation on path_str (starts_with,
+    // strip_prefix, etc.) UB on non-UTF-8 input. Reject with EINVAL.
+    let path_str = match core::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return EINVAL,
+    };
 
     // + #154: per-path FS cap enforcement, factored into
     // `check_fs_path_cap` so the same logic applies uniformly across
@@ -3884,6 +3896,15 @@ pub static mut UDP_RX_LEN: [usize; UDP_RX_SLOTS] = [0; UDP_RX_SLOTS];
 pub static mut UDP_RX_HEAD: usize = 0; // next write slot
 pub static mut UDP_RX_TAIL: usize = 0; // next read slot
 pub static mut UDP_RX_READY: bool = false;
+// AUDIT-CAVE-C2 (2026-05-15): per-slot cave_id tag. Set at store
+// time to the cave active when the datagram arrived. At read time,
+// only deliver if the active cave matches — otherwise drop and
+// advance TAIL. Cave-switch reset (reset_cave_statics) zeroes the
+// whole ring, so the cross-cave-at-switch case is closed there;
+// this tag closes the same-cave-id-collision case where two
+// in-flight bindings from different caves would otherwise see each
+// other's datagrams within a single cave's session.
+pub static mut UDP_RX_CAVE: [usize; UDP_RX_SLOTS] = [0; UDP_RX_SLOTS];
 
 fn sys_socket(args: [u64; 6]) -> i64 {
     let domain = args[0] as u32;
@@ -4284,6 +4305,14 @@ fn sys_recvfrom(args: [u64; 6]) -> i64 {
                     unsafe {
                         if UDP_RX_TAIL < UDP_RX_HEAD {
                             let slot = UDP_RX_TAIL % UDP_RX_SLOTS;
+                            // AUDIT-CAVE-C2: drop and advance if this
+                            // slot was tagged for a different cave.
+                            // Prevents one cave from reading another's
+                            // in-flight UDP responses.
+                            if UDP_RX_CAVE[slot] != crate::caves::cave::get_active() {
+                                UDP_RX_TAIL += 1;
+                                continue;
+                            }
                             let n = UDP_RX_LEN[slot].min(len);
                             let rx_ptr = core::ptr::addr_of!(UDP_RX_BUF) as usize + slot * 512;
                             for i in 0..n {
@@ -4637,7 +4666,12 @@ pub(crate) fn has_dotdot(path: &[u8]) -> bool {
 /// Returns Err(EACCES) otherwise. UART-logs the block at the call
 /// site's chosen tag so audit can trace which syscall enforced it.
 fn check_fs_path_cap(path: &[u8], syscall_tag: &str) -> Result<(), i64> {
-    let path_str = unsafe { core::str::from_utf8_unchecked(path) };
+    // AUDIT-MEM-C1: see sys_openat_inner. Reject non-UTF-8 paths so
+    // every cap-check string operation is well-defined.
+    let path_str = match core::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return Err(EINVAL),
+    };
     if !path_str.starts_with('/') {
         // Relative paths flow through a dirfd whose open was already
         // cap-checked. has_dotdot guards in each caller stop "../"
@@ -4702,8 +4736,10 @@ fn sys_faccessat(args: [u64; 6]) -> i64 {
         }
     }
 
-    // Fallback
-    let path = unsafe { core::str::from_utf8_unchecked(&path_buf[..path_len]) };
+    // Fallback. AUDIT-MEM-C1: empty-str fallback so starts_with
+    // gracefully fails on non-UTF-8 (faccessat returns ENOENT, which
+    // is the right errno for "no such accessible file").
+    let path = core::str::from_utf8(&path_buf[..path_len]).unwrap_or("");
     if path.starts_with("/bin/") || path.starts_with("/usr/bin/") || path == "/" { 0 }
     else { ENOENT }
 }
@@ -5246,7 +5282,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
         let handled = match tool {
             "uname" => {
                 if argc > 1 {
-                    let arg1 = unsafe { core::str::from_utf8_unchecked(&argv_strs[1][..argv_lens[1]]) };
+                    let arg1 = core::str::from_utf8(&argv_strs[1][..argv_lens[1]]).unwrap_or("");
                     if arg1 == "-a" {
                         write_str("Sphragis caves 1.0.0 Sphragis 1.0.0 aarch64 aarch64\n");
                     } else {
@@ -5300,7 +5336,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                         Err(_) => {
                             write_str("ls: can't open '");
                             if argc > 1 {
-                                write_str(unsafe { core::str::from_utf8_unchecked(&argv_strs[1][..argv_lens[1]]) });
+                                write_str(core::str::from_utf8(&argv_strs[1][..argv_lens[1]]).unwrap_or(""));
                             }
                             write_str("': No such file or directory\n");
                         }
@@ -5331,13 +5367,13 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                             }
                             Err(_) => {
                                 write_str("cat: can't open '");
-                                write_str(unsafe { core::str::from_utf8_unchecked(file_path) });
+                                write_str(core::str::from_utf8(file_path).unwrap_or(""));
                                 write_str("': No such file or directory\n");
                             }
                         }
                     } else {
                         write_str("cat: ");
-                        write_str(unsafe { core::str::from_utf8_unchecked(file_path) });
+                        write_str(core::str::from_utf8(file_path).unwrap_or(""));
                         write_str(": No such file\n");
                     }
                 }
@@ -5362,7 +5398,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                         Ok(idx) => { vfs::remove_node(idx).ok(); }
                         Err(_) => {
                             write_str("rm: can't remove '");
-                            write_str(unsafe { core::str::from_utf8_unchecked(fpath) });
+                            write_str(core::str::from_utf8(fpath).unwrap_or(""));
                             write_str("': No such file or directory\n");
                         }
                     }
@@ -5377,7 +5413,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                             Ok(_) => {}
                             Err(_) => {
                                 write_str("mkdir: can't create '");
-                                write_str(unsafe { core::str::from_utf8_unchecked(dpath) });
+                                write_str(core::str::from_utf8(dpath).unwrap_or(""));
                                 write_str("'\n");
                             }
                         }
@@ -5392,7 +5428,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                         Ok(idx) => {
                             if vfs::remove_node(idx).is_err() {
                                 write_str("rmdir: can't remove '");
-                                write_str(unsafe { core::str::from_utf8_unchecked(dpath) });
+                                write_str(core::str::from_utf8(dpath).unwrap_or(""));
                                 write_str("': Directory not empty\n");
                             }
                         }
@@ -5433,7 +5469,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                         }
                         Err(_) => {
                             write_str("cp: can't stat '");
-                            write_str(unsafe { core::str::from_utf8_unchecked(src) });
+                            write_str(core::str::from_utf8(src).unwrap_or(""));
                             write_str("': No such file\n");
                         }
                     }
@@ -5450,7 +5486,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
             }
             "which" | "type" => {
                 if argc > 1 {
-                    let cmd = unsafe { core::str::from_utf8_unchecked(&argv_strs[1][..argv_lens[1]]) };
+                    let cmd = core::str::from_utf8(&argv_strs[1][..argv_lens[1]]).unwrap_or("");
                     write_str("/bin/");
                     write_str(cmd);
                     write_str("\n");
@@ -5494,7 +5530,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                 if vfs::is_ready() {
                     let mut path = [0u8; 128];
                     let len = vfs::node_path(vfs::get_cwd(), &mut path);
-                    write_str(unsafe { core::str::from_utf8_unchecked(&path[..len]) });
+                    write_str(core::str::from_utf8(&path[..len]).unwrap_or(""));
                     write_str("\n");
                 } else {
                     write_str("/\n");
@@ -6388,6 +6424,9 @@ pub fn reset_cave_statics() {
         for slot in 0..UDP_RX_SLOTS {
             UDP_RX_LEN[slot] = 0;
             for b in 0..UDP_RX_BUF[slot].len() { UDP_RX_BUF[slot][b] = 0; }
+            // AUDIT-CAVE-C2: also clear per-slot cave_id so a stale
+            // tag doesn't pin a slot to a destroyed cave.
+            UDP_RX_CAVE[slot] = 0;
         }
         UDP_RX_HEAD = 0;
         UDP_RX_TAIL = 0;

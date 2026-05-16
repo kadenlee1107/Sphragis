@@ -181,11 +181,79 @@ pub fn verify_file_integrity(idx: usize) -> bool {
     }
 }
 
+/// HMAC-SHA256 of the Merkle root, keyed by the BatFS master key.
+/// Updated by `seal_merkle_root()` on every create/delete (the same
+/// points that call `rebuild_merkle`). Used by `verify_all_integrity`
+/// as the externally-anchored expected value against which the
+/// recomputed root is checked.
+///
+/// AUDIT-FS-C3 (2026-05-15): the prior `verify_all_integrity` was
+/// tautological — it compared the recomputed Merkle root against
+/// the same value it had just computed. Storing an HMAC keyed by
+/// the master key means a tamperer must ALSO know the master key
+/// (or have kernel-write to overwrite MERKLE_HMAC) to forge a
+/// matching post-tamper value. In-RAM today; SEP-sealed export is
+/// the follow-up that makes this resilient to kernel-write
+/// tamperers.
+static mut MERKLE_HMAC: [u8; 32] = [0u8; 32];
+static mut MERKLE_HMAC_VALID: bool = false;
+
+/// Recompute MERKLE_HMAC over the current Merkle root. Called from
+/// every code path that calls `rebuild_merkle` (create, delete,
+/// declassify, init_disk restore).
+fn seal_merkle_root() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let key = core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY));
+        let root = (*core::ptr::addr_of!(MERKLE_TREE))[1];
+        let hmac = sha256::hmac(&key, &root);
+        *core::ptr::addr_of_mut!(MERKLE_HMAC) = hmac;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(MERKLE_HMAC_VALID), true);
+        // Zero the stack-local master-key copy so it doesn't linger.
+        let mut k = key;
+        crate::security::zeroize::zeroize(&mut k);
+    }
+}
+
 /// Verify the entire filesystem integrity.
+///
+/// AUDIT-FS-C3 (2026-05-15): replaced the prior tautology
+/// (recompute root → compare to recomputed root) with HMAC-based
+/// verification. Recomputes the Merkle root from current FILES[],
+/// then HMACs it with the master key, then constant-time-compares
+/// against MERKLE_HMAC (which was sealed at last create/delete).
+/// Detects:
+/// * Off-line disk tampering (an attacker who edits inode/data
+///   sectors without knowing the master key cannot forge a
+///   matching HMAC).
+/// * In-RAM tampering that doesn't reach MERKLE_HMAC (e.g. via
+///   a write-primitive that only writes FILES[]).
+/// Does NOT detect:
+/// * An attacker with kernel-write who overwrites both FILES[]
+///   AND MERKLE_HMAC. Mitigation: SEP-seal the HMAC. Follow-up
+///   wave once sep.rs lands.
 pub fn verify_all_integrity() -> bool {
-    let saved_root = merkle_root();
-    rebuild_merkle();
-    merkle_root() == saved_root
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        if !core::ptr::read_volatile(core::ptr::addr_of!(MERKLE_HMAC_VALID)) {
+            // Never sealed (fresh boot before any write). Trivially OK.
+            return true;
+        }
+        rebuild_merkle();
+        let key = core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY));
+        let root = (*core::ptr::addr_of!(MERKLE_TREE))[1];
+        let expected_hmac = sha256::hmac(&key, &root);
+        let stored = *core::ptr::addr_of!(MERKLE_HMAC);
+        // Zero the stack-local master-key copy.
+        let mut k = key;
+        crate::security::zeroize::zeroize(&mut k);
+        // Constant-time compare.
+        let mut diff: u8 = 0;
+        for i in 0..32 {
+            diff |= expected_hmac[i] ^ stored[i];
+        }
+        diff == 0
+    }
 }
 
 /// Initialize the filesystem with a master encryption key.
@@ -325,6 +393,10 @@ fn init_disk(master_key: &[u8; 32]) {
     uart::puts(" file(s) from disk\n");
 
     rebuild_merkle();
+    // AUDIT-FS-C3: seal the restored state's root under the master
+    // key so subsequent verify_all_integrity() can detect post-mount
+    // tampering.
+    seal_merkle_root();
 }
 
 fn write_dec(mut n: usize, out: &mut [u8]) -> usize {
@@ -713,6 +785,7 @@ pub fn declassify(name: &str, new_sens: u8, new_integ: u8) -> Result<(u8, u8), &
         plain_len
     };
     rebuild_merkle();
+    seal_merkle_root();  // AUDIT-FS-C3
     let _ = plain_len; // silence unused-binding warning in release builds
     Ok((new_sens, new_integ))
 }
@@ -998,6 +1071,7 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
 
     // Update Merkle tree
     rebuild_merkle();
+    seal_merkle_root();  // AUDIT-FS-C3
 
     Ok(())
 }
@@ -1107,6 +1181,7 @@ pub fn delete(name: &str) -> Result<(), &'static str> {
 
     // Update Merkle tree
     rebuild_merkle();
+    seal_merkle_root();  // AUDIT-FS-C3
     Ok(())
 }
 

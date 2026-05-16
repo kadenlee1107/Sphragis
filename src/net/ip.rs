@@ -88,6 +88,28 @@ impl<'a> IpPacket<'a> {
         if total_len < ihl { return None; }
         if total_len > data.len() { return None; }
 
+        // AUDIT-NET-F1 (2026-05-15): reject IPv4 fragments. The prior
+        // parser dispatched fragments (MF=1 or frag_offset!=0) to the
+        // upper-layer protocol handlers (tcp::handle_incoming,
+        // udp::handle, icmp::handle) as if they were complete datagrams.
+        // The transport-layer parsers then interpreted the fragment
+        // payload bytes as a forged transport header. Conntrack matches
+        // only on (proto, src_ip, src_port, dst_port) so a TCP first-
+        // fragment crafted to match an established outbound flow would
+        // inject arbitrary seq/ack/flag bits — off-path RST attack +
+        // RFC 5961 challenge-ACK state leak. Tail fragments (frag_offset
+        // != 0) carrying bytes that look like a transport header had the
+        // same shape.
+        //
+        // Sphragis does not perform reassembly. The right policy for a
+        // security-first OS is "reject fragments outright" — RFC 8200/
+        // 8900 §4.5 also strongly discourages fragmentation in modern
+        // deployments. Bytes 6-7 layout: flags(3 bits) | frag_offset(13).
+        let flags_and_frag = u16::from_be_bytes([data[6], data[7]]);
+        let mf      = (flags_and_frag & 0x2000) != 0;  // More-Fragments bit
+        let frag_off = flags_and_frag & 0x1FFF;
+        if mf || frag_off != 0 { return None; }
+
         // ATTACK-NET-008: verify the IPv4 header checksum. Over a valid header
         // the one's-complement sum is 0xFFFF (!=0 after the final complement).
         if checksum(&data[..ihl]) != 0 { return None; }
@@ -312,6 +334,25 @@ pub fn set_inbound_cipso_ceiling(level: u8) {
 /// Handle an incoming IP packet.
 pub fn handle(data: &[u8]) {
     if let Some(pkt) = IpPacket::parse(data) {
+        // AUDIT-NET-F3 (2026-05-15): filter inbound packets by dst-IP.
+        // The prior code dispatched to transport handlers without
+        // verifying pkt.dst == our_ip(). With promiscuous-mode NICs or
+        // misconfigured switches, packets destined for OTHER hosts on
+        // the segment reached our TCP / ICMP handlers. Combined with
+        // conntrack matching on (proto, remote_ip, remote_port,
+        // local_port) (Net-F6) this gave an L2-adjacent attacker
+        // injection into any of our PCBs without addressing our IP.
+        // Broadcast (255.255.255.255) and multicast (224.0.0.0/4) also
+        // unconditionally reached ICMP echo — classic smurf amplifier.
+        //
+        // Policy: accept only unicast packets addressed to us. Drop
+        // broadcast and multicast outright; if we ever need multicast
+        // (mDNS / SSDP / etc.) the receiver side wires explicit joined-
+        // group state and accepts only those addresses.
+        if pkt.dst != our_ip() {
+            return;
+        }
+
         // Receiver-side SECMARK enforcement (§3.2). If the packet
         // carries a CIPSO label, gate delivery on the kernel-wide
         // ceiling. A sensitivity above the ceiling means "this

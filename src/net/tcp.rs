@@ -1361,6 +1361,38 @@ pub fn handle_incoming(pkt: &IpPacket) {
 
     if data_off < TCP_HDR_SIZE || data_off > pkt.payload.len() { return; }
 
+    // AUDIT-NET-F5 (2026-05-15): bound-check the TCP options region
+    // between byte 20 and data_off. Prior code never inspected options
+    // at all — every option-bearing segment was silently accepted,
+    // duplicate MSS/WS were not rejected, and crafted len=0 / len>
+    // remaining-space options would have panicked any future parser
+    // that walked them without bounds. SACK-class CVEs (CVE-2019-11477
+    // "SACK Panic" et al.) live in this surface.
+    //
+    // Minimum-safety policy: scan options for structural validity
+    // (each option's len byte fits within data_off; non-1-byte options
+    // have len>=2; no option claims to extend past data_off). Reject
+    // the segment on any malformation. This does NOT yet honor MSS /
+    // Window-Scale / SACK semantically — a follow-up wave wires that
+    // in. But it closes the parser-panic / accept-malformed surface
+    // today.
+    {
+        let opts_start = TCP_HDR_SIZE;
+        let opts_end   = data_off;
+        let mut p = opts_start;
+        while p < opts_end {
+            let kind = pkt.payload[p];
+            if kind == 0 { break; }       // EOL
+            if kind == 1 { p += 1; continue; }  // NOP (1 byte)
+            // All other options are TLV: kind, len, value...
+            if p + 1 >= opts_end { return; } // missing len byte
+            let len = pkt.payload[p + 1] as usize;
+            if len < 2 { return; }            // bogus len
+            if p + len > opts_end { return; } // option overruns header
+            p += len;
+        }
+    }
+
     let id = match pcb_lookup(pkt.src, src_port, dst_port) {
         Some(i) => i,
         None => {
@@ -1591,6 +1623,19 @@ pub fn handle_incoming(pkt: &IpPacket) {
                     let free = p.rx_free();
                     let copy = payload_len.min(free);
                     if copy > 0 {
+                        // AUDIT-NET-F2 (2026-05-15): the producer
+                        // (this loop + rx_head store) MUST be atomic
+                        // with respect to a concurrent dispatch ISR
+                        // delivering another segment to the same PCB.
+                        // Without IrqGuard, an interrupt mid-loop can
+                        // re-enter dispatch_host_frame → handle_incoming
+                        // on a second segment, clobber `head`, and
+                        // produce a partially-written ring with mixed
+                        // bytes from two segments — application-level
+                        // protocol confusion (TLS-record split,
+                        // HTTP-smuggling). Prior audit's F10 flagged
+                        // this; the fix was never landed. Restore it.
+                        let _g = crate::kernel::sync::IrqGuard::new();
                         let head = p.rx_head.load(Ordering::Acquire);
                         for i in 0..copy {
                             let idx = (head + i) & (RX_BUF_SIZE - 1);

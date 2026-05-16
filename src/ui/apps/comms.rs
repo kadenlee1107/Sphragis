@@ -347,6 +347,8 @@ pub fn connect(ip: u32, port: u16) -> Result<(), &'static str> {
         shared.as_bytes(),
         &eph_pk_bytes,
         &srv_eph_pk,
+        &id_pk_bytes,    // AUDIT-DRV-C3: our identity (client)
+        &pinned,         // AUDIT-DRV-C3: server's pinned identity
     );
 
     unsafe {
@@ -367,7 +369,13 @@ pub fn send_message(text: &[u8]) -> Result<(), &'static str> {
     let nonce = unsafe { nonce_from_ctr(SEND_CTR) };
     let key  = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(C2S_KEY)) };
 
-    let ct_tag = match cp::encrypt(&key, &nonce, &[], text) {
+    // AUDIT-DRV-C2 (2026-05-15): bind the protocol LABEL into the
+    // AEAD AAD. Without this, the only direction-binding is the
+    // per-direction key (which itself was un-id-bound until Drv-C3
+    // wired in). With the LABEL in AAD, any future LABEL rotation
+    // (e.g. v2 protocol bump) cannot decrypt v1 frames — closes
+    // cross-protocol-version replay.
+    let ct_tag = match cp::encrypt(&key, &nonce, LABEL, text) {
         Ok(v) => v,
         Err(_) => return Err("encrypt failed"),
     };
@@ -419,7 +427,8 @@ pub fn recv_message() -> bool {
     let mut nonce_arr = [0u8; cp::NONCE_LEN];
     nonce_arr.copy_from_slice(nonce_bytes);
     let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(S2C_KEY)) };
-    let pt = match cp::decrypt(&key, &nonce_arr, &[], ct_tag) {
+    // AUDIT-DRV-C2: must mirror sender's AAD = LABEL.
+    let pt = match cp::decrypt(&key, &nonce_arr, LABEL, ct_tag) {
         Ok(v) => v,
         Err(_) => {
             add_system_msg("Recv: AEAD tag verify FAILED (tampered).");
@@ -481,25 +490,43 @@ fn verify_offer(offer: &[u8; OFFER_LEN], pinned_id: &[u8; 32])
     Ok(out)
 }
 
-/// Derive (c2s, s2c) directional keys. Mirrors the Python server's
-/// derive_keys.
-fn derive_directional_keys(shared: &[u8], client_eph_pk: &[u8; 32],
-                            server_eph_pk: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    // SHA-256(direction-label || shared || client_eph || server_eph).
+/// Derive (c2s, s2c) directional keys.
+///
+/// AUDIT-DRV-C3 (2026-05-15): committed inputs now include BOTH
+/// client and server long-term identity pubkeys. Without that, an
+/// attacker who could drive the same (eph_sk_c, eph_sk_s) pair
+/// across two sessions under different pinned identities would
+/// derive the same transport keys — structural soundness gap (NIST
+/// SP 800-56C recommends committing every public value from the
+/// handshake in the KDF). With ephemerals randomly generated this
+/// is hard in practice, but the binding closes the gap.
+///
+/// KDF input layout (96 + 32 + 32 + 32 + 32 + KEY_DIR_LEN bytes):
+///   direction_label || shared || client_eph || server_eph ||
+///   client_id_pk    || server_id_pk
+fn derive_directional_keys(
+    shared: &[u8],
+    client_eph_pk: &[u8; 32],
+    server_eph_pk: &[u8; 32],
+    client_id_pk:  &[u8; 32],
+    server_id_pk:  &[u8; 32],
+) -> ([u8; 32], [u8; 32]) {
     // Buffer sized via KEY_DIR_LEN const so a future KEY_DIR rename
-    // can't reintroduce the stale-size bug. KEY_DIR_C2S and
-    // KEY_DIR_S2C are compile-time asserted to share a length.
-    let mut buf = [0u8; KEY_DIR_LEN + 32 + 32 + 32];
+    // can't reintroduce a stale-size bug. KEY_DIR_C2S and KEY_DIR_S2C
+    // are compile-time asserted to share a length.
+    let mut buf = [0u8; KEY_DIR_LEN + 32 + 32 + 32 + 32 + 32];
 
     buf[..KEY_DIR_LEN].copy_from_slice(KEY_DIR_C2S);
-    buf[KEY_DIR_LEN..KEY_DIR_LEN + 32].copy_from_slice(shared);
-    buf[KEY_DIR_LEN + 32..KEY_DIR_LEN + 64].copy_from_slice(client_eph_pk);
-    buf[KEY_DIR_LEN + 64..KEY_DIR_LEN + 96].copy_from_slice(server_eph_pk);
+    buf[KEY_DIR_LEN          ..KEY_DIR_LEN + 32 ].copy_from_slice(shared);
+    buf[KEY_DIR_LEN + 32     ..KEY_DIR_LEN + 64 ].copy_from_slice(client_eph_pk);
+    buf[KEY_DIR_LEN + 64     ..KEY_DIR_LEN + 96 ].copy_from_slice(server_eph_pk);
+    buf[KEY_DIR_LEN + 96     ..KEY_DIR_LEN + 128].copy_from_slice(client_id_pk);
+    buf[KEY_DIR_LEN + 128    ..KEY_DIR_LEN + 160].copy_from_slice(server_id_pk);
     let c2s = sha256::hash(&buf);
 
     buf[..KEY_DIR_LEN].copy_from_slice(KEY_DIR_S2C);
-    // shared / eph slots from C2S pass are still correct; only the
-    // direction label changed.
+    // shared / eph / id slots from C2S pass are still correct; only
+    // the direction label changed.
     let s2c = sha256::hash(&buf);
 
     (c2s, s2c)
@@ -557,10 +584,14 @@ pub fn handshake_selftest() -> Result<(), &'static str> {
 
     // Derive directional keys on both sides — exercises
     // derive_directional_keys with the live KEY_DIR_LEN-sized buffer.
+    // AUDIT-DRV-C3: both client and server identities are part of the
+    // KDF input. Same client/server id_pk pair from both sides.
     let (client_c2s, client_s2c) = derive_directional_keys(
-        client_shared.as_bytes(), &client_eph_pk, &server_eph_pk);
+        client_shared.as_bytes(), &client_eph_pk, &server_eph_pk,
+        &client_id_pk, &server_id_pk);
     let (server_c2s, server_s2c) = derive_directional_keys(
-        server_shared.as_bytes(), &client_eph_pk, &server_eph_pk);
+        server_shared.as_bytes(), &client_eph_pk, &server_eph_pk,
+        &client_id_pk, &server_id_pk);
 
     if client_c2s != server_c2s { return Err("c2s key disagreement"); }
     if client_s2c != server_s2c { return Err("s2c key disagreement"); }
