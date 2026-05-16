@@ -1282,8 +1282,50 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     }
                 }
             } else {
+                // AUDIT-CAVE-C1 + AUDIT-MEM-H1 (2026-05-15): refuse
+                // SVC #N (N != 0) from EL0. The native kernel syscall
+                // path at `kernel::syscall::handle` reads raw user
+                // pointers from x[0..6] via `core::slice::from_raw_parts`
+                // without going through `kernel::uaccess::is_user_range`,
+                // so an EL0 attacker who passes a kernel address gets
+                // the kernel to operate on kernel memory (read leak via
+                // SYS_BIND/SYS_CONNECT name lookups; arbitrary write via
+                // SYS_WRITE). SYS_SHM_PTR additionally returns a kernel
+                // VA to userspace which trivially defeats every other
+                // isolation primitive (Cave-C3).
+                //
+                // The Linux ABI path (`caves::linux::syscall::handle`)
+                // is the hardened-and-only-supported syscall surface for
+                // EL0 callers; the native path is kernel-internal only
+                // (and has no actual kernel callers today either —
+                // grep confirms). Reject all EL0-origin SVC #N!=0 with
+                // -EPERM + audit-log; advance ELR past the SVC so the
+                // cave returns from svc cleanly.
                 unsafe {
-                    crate::kernel::syscall::handle(svc_num, &mut *frame);
+                    let f = &mut *frame;
+                    // SPSR.M[3:0]; 0b0000 = EL0t (user mode).
+                    let mode = (f.spsr & 0xF) as u8;
+                    if mode == 0 {
+                        crate::security::audit::record(
+                            crate::security::audit::Category::Cave,
+                            b"EL0 svc #N!=0 refused (native syscall path is kernel-only)",
+                        );
+                        // -EPERM (errno 1) — opaque to the cave.
+                        f.x[0] = (-1i64) as u64;
+                        // Advance ELR past the 4-byte SVC instruction.
+                        f.elr = f.elr.wrapping_add(4);
+                    } else {
+                        // EL1-origin SVC #N!=0: also rejected. No
+                        // legitimate caller exists; if one ever shows
+                        // up, route through a direct function call,
+                        // not SVC.
+                        crate::security::audit::record(
+                            crate::security::audit::Category::Boot,
+                            b"EL1 svc #N!=0 refused (no legitimate caller)",
+                        );
+                        f.x[0] = (-1i64) as u64;
+                        f.elr = f.elr.wrapping_add(4);
+                    }
                 }
             }
         }
