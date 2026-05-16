@@ -478,20 +478,46 @@ pub fn check_hostname(cert: &Certificate, hostname: &[u8]) -> bool {
 }
 
 /// Wildcard-aware hostname match. `pattern` may start with `*.` meaning
-/// "any single leftmost label matches". No middle-wildcards, no
-/// IDN translation (input hostnames should be ASCII-encoded upstream).
+/// "any single leftmost label matches".
+///
+/// AUDIT-CRYPTO-F17 + F18 (2026-05-15): case-insensitive ASCII match
+/// per RFC 6125 §6.4.1 + reject empty-leftmost-label wildcards.
+/// Prior implementation:
+///   * Did byte-exact compare, so `Example.com` cert vs `example.com`
+///     request failed (false negative; not exploitable but
+///     RFC-non-conformant — would have shown up when peer cert CN
+///     mixed case).
+///   * Pattern `*.example.com` matched `hostname = .example.com`
+///     (empty leftmost label) because `position(|b| b == b'.')`
+///     returned Some(0) and the suffix matched. DNS resolvers don't
+///     yield empty-leftmost-label names but a future protocol path
+///     that does could pass our SAN check and resolve differently.
 fn hostname_matches(pattern: &[u8], hostname: &[u8]) -> bool {
-    if pattern == hostname {
+    // ASCII-case-insensitive exact match.
+    if eq_ignore_ascii_case(pattern, hostname) {
         return true;
     }
     if pattern.len() > 2 && &pattern[..2] == b"*." {
         let suffix = &pattern[1..]; // keep the leading "."
-        // Find the first '.' in hostname.
+        // Find the first '.' in hostname. Require at least one char
+        // before it (idx > 0) so `*.example.com` doesn't match
+        // `.example.com` (empty leftmost label).
         if let Some(idx) = hostname.iter().position(|&b| b == b'.') {
-            return &hostname[idx..] == suffix;
+            if idx > 0 {
+                return eq_ignore_ascii_case(&hostname[idx..], suffix);
+            }
         }
     }
     false
+}
+
+fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i].to_ascii_lowercase() ^ b[i].to_ascii_lowercase();
+    }
+    diff == 0
 }
 
 /// Verify an ECDSA signature (P-256 only in this minimal build) over
