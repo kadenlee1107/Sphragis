@@ -401,3 +401,18 @@ fn format_size(bytes: usize, out: &mut [u8]) -> (usize, &'static str) {
         (n, "M")
     }
 }
+
+/// AUDIT-DRV-C1 (2026-05-15): zero the 8 KB PREVIEW_BUF on cave
+/// switch so the last-previewed file from the previous cave isn't
+/// visible to the new cave. Also resets selection / viewport / mode.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SELECTED_FILE), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), 0);
+        *core::ptr::addr_of_mut!(PREVIEW_BUF) = [0u8; 8192];
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PREVIEW_LEN), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PREVIEW_VALID_FOR), usize::MAX);
+    }
+}

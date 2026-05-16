@@ -450,3 +450,18 @@ fn write_pad2(buf: &mut [u8], n: &mut usize, v: u32) {
     }
     write_dec(buf, n, v);
 }
+
+/// AUDIT-DRV-C1 (2026-05-15): zero the security-app's per-cave
+/// state on cave switch. CHAIN_STATUS may hold the audit-chain head
+/// hash from the previous cave's verify operation; APP_MODE could
+/// leave the wipe-confirm modal armed across boundaries. Reset both
+/// plus the viewport scroll offset.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), 0);
+        *core::ptr::addr_of_mut!(CHAIN_STATUS) = [0u8; 96];
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CHAIN_STATUS_LEN), 0);
+    }
+}

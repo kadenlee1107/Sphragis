@@ -848,3 +848,16 @@ fn build_form_fields(f: &mut FormScratch, name_readonly: bool) -> [FormField<'_>
         FormField { key: "TAINT",     kind: FieldKind::Hex32 { value: &mut f.taint },                                              readonly: false },
     ]
 }
+
+/// AUDIT-DRV-C1 (2026-05-15): zero the caves-manager scratch on
+/// cave switch. FORM may hold a half-typed new-cave name (which can
+/// be sensitive — operator-chosen identifier) along with MLS labels
+/// and mount path scratch from the previous cave's edit session.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SELECTED_CAVE), 0);
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+        *core::ptr::addr_of_mut!(FORM) = None;
+    }
+}
