@@ -1,0 +1,9 @@
+Sphragis Operating System
+Copyright 2026 Kaden Lee and contributors
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full license text.
+
+This product includes software developed by the Sphragis project
+and third-party Rust crates listed in Cargo.toml. See SBOM artifacts
+in releases for the complete dependency graph and per-dependency licenses.

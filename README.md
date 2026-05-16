@@ -1,10 +1,26 @@
 # Sphragis
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 **Bare-metal Rust microkernel for Apple Silicon. Government-grade security primitives. Boots on real Apple M4 hardware.**
 
 > ⚠️ Research-grade. Not production-ready. APIs and on-disk formats change without notice.
 
 Sphragis is a security-first microkernel for Apple Silicon, written in Rust and built from scratch — no Linux base, no Asahi fork, no off-the-shelf VFS or networking stack. It boots on real Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan"), reaching an interactive shell with a status bar over m1n1 chainload, using a reverse-engineering pipeline independent of the Asahi toolchain. ([boot evidence](docs/photos/2026-04-17_first_m4_boot/))
+
+## What Sphragis Is
+
+Sphragis is a **sovereign-grade attested-cave OS for the post-quantum, capability-hardware era** — built to be procurable in the 2027-2030 procurement world, not retrofitted to it.
+
+**Five differentiators:**
+
+1. **Rust microkernel + information-flow proofs** on the capability and IPC subsystems (via Verus or Kani — non-interference, not full functional correctness; we cede that lane to seL4)
+2. **CNSA-2.0-native, PQC-only crypto** — ML-KEM-1024, ML-DSA-87, AES-256, SHA-384 by default in the gov build; no classical fallback (auto-clears the NSA Jan 2027 deadline for new National Security System acquisitions)
+3. **Attestation as a first-class kernel primitive** — every cave is an attestable identity, rooted in Caliptra / Apple SEP / TPM 2.0 hardware roots, with HSM-backed operator CA pattern
+4. **Reproducible, bootstrappable, SLSA-L4 build chain** — bit-for-bit reproducible from source, sigstore-signed, in-toto-attested
+5. **CHERI-ready architecture** — caves map 1:1 to CHERI compartments; CHERIoT-Ibex embedded variant ships in 2026-27
+
+See [ANTI_FEATURES.md](ANTI_FEATURES.md) for explicit non-goals.
 
 ## What's it for
 
@@ -27,7 +43,7 @@ Sphragis is opinionated about one thing in particular: **no ambient authority**.
 - **Information-flow taint propagation.** 32-bit operator-defined taint bitmap per cave and per file; monotonic OR-propagation through filesystem reads (file → cave) and writes (cave → file). The substrate for future egress enforcement on PII / compliance-restricted / trade-secret data.
 - **WireGuard responder.** Cave-private state (no peer leaks between caves), Noise IK handshake, sliding-window replay protection. Verified end-to-end against a Python initiator over a closed wire.
 - **CALIPSO + CIPSO labelling.** RFC 5570 IPv6 SECMARK encode/parse with DOI gate; RFC 2401 IPv4 IP options.
-- **Supply-chain hygiene.** `Cargo.lock` audited against [OSV.dev](https://osv.dev/) with documented suppressions for non-applicable findings. Every transitive dependency is permissive-licensed (MIT / Apache-2.0 / BSD / CC0 / Unlicense); no copyleft contamination in the tree.
+- **Supply-chain hygiene.** `Cargo.lock` audited against [OSV.dev](https://osv.dev/) and the [RustSec advisory DB](https://rustsec.org/) (enforced in CI via `cargo-deny` + `cargo-audit`). Every transitive dependency is permissive-licensed (MIT / Apache-2.0 / BSD / ISC / CC0 / Unicode / Zlib); no copyleft anywhere in the tree.
 - **Reproducible builds.** `scripts/repro_build.sh` produces deterministic kernel images.
 - **Sigstore-style release signing.** Build-step signatures + Rekor-compatible Merkle log + in-toto v0.9 attestations on release artifacts.
 
@@ -101,12 +117,13 @@ src/
 
 ## License
 
-Sphragis is **dual-licensed**:
+Sphragis is licensed under [**Apache License 2.0**](LICENSE).
 
-- **[AGPL-3.0-or-later](LICENSE)** for research, academic citation, non-commercial use, and any project willing to comply with AGPL's source-availability clause (including the network-use clause §13).
-- **[Commercial license](LICENSE-COMMERCIAL.md)** sold separately for closed-source integration, regulated deployments that need warranty / indemnification, or organisations whose policies prohibit AGPL software. Contact `sphragis-os@proton.me`.
+**Relicense note (2026-05-16):** Sphragis was previously dual-licensed under AGPL-3.0-or-later + a separate commercial license. As part of the gov-OS productization plan (SP-A1), the project relicensed to Apache-2.0 — primes (Lockheed, Northrop, Booz Allen, etc.) will not embed copyleft code into their proprietary product lines, and Apache-2.0 is the procurement-standard license for federal contractor integration.
 
-Dependencies are MIT / Apache-2.0 / BSD / CC0 / Unlicense throughout — verified clean as of 2026-05-13. No copyleft contamination in the tree, so the dual-license option remains preserved.
+Dependencies are MIT / Apache-2.0 / BSD / ISC / CC0 / Unicode / Zlib throughout — enforced in CI by [`deny.toml`](deny.toml). No copyleft dependencies anywhere in the tree.
+
+Contributions accepted under the [Developer Certificate of Origin](https://developercertificate.org); use `git commit -s`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contact
 
