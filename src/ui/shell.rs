@@ -401,12 +401,8 @@ fn execute_inner(cmd: &str) {
         "pin" => cmd_pin(parts[1], parts[2]),
         "crl" => cmd_crl(parts[1], parts[2], parts[3]),
         "hash" => cmd_hash(parts[1], parts[2]),
-        "ai" => {
-            // Everything after "ai " is the question, including spaces.
-            let q = cmd.trim_start()
-                .split_once(' ').map(|(_, r)| r.trim()).unwrap_or("");
-            cmd_ai(q);
-        }
+        // "ai" command removed 2026-05-16 per SP-A2 (AGENT app dropped;
+        // anti-feature ANTI-002).
         "tcp-selftest" => cmd_tcp_selftest(),
         "tcp-listen" => cmd_tcp_listen(parts[1]),
         "tcp-list" => cmd_tcp_list(),
@@ -10880,69 +10876,8 @@ fn cmd_dmesg(arg: &str) {
     });
 }
 
-/// Ask the on-device AI agent a question. Today this opens an
-/// AgentSession, fires `ask()`, and polls the streaming response
-/// for text events. The actual inference happens on the operator-
-/// configured remote host (see DESIGN_AI_AGENT.md §Inference host).
-fn cmd_ai(question: &str) {
-    use crate::ai::{AgentSession, StreamEvent, AgentError};
-    if question.is_empty() {
-        console::puts("  usage: ai <question>\n");
-        return;
-    }
-    let mut session = match AgentSession::new() {
-        Ok(s) => s,
-        Err(e) => {
-            console::puts("  ai: failed to start session: ");
-            // AUDIT-DRV-M8 (2026-05-15): print only the variant label,
-            // not the inner static string. The inner string may carry
-            // operator-deployment-specific details (hostname, error
-            // codes from the inference host) that a screen observer
-            // shouldn't see.
-            console::puts(match e {
-                AgentError::Network(_)      => "network",
-                AgentError::Protocol(_)     => "protocol",
-                AgentError::Tool(_)         => "tool",
-                AgentError::PolicyDenied    => "policy denied",
-                AgentError::Interrupted     => "interrupted",
-                AgentError::TokenBudget     => "token budget",
-            });
-            console::puts("\n");
-            return;
-        }
-    };
-    let mut response = session.ask(question);
-    loop {
-        match response.poll() {
-            StreamEvent::Text(t) => {
-                console::puts(&t);
-            }
-            StreamEvent::ToolCall { name } => {
-                console::puts("\n  [tool: ");
-                console::puts(name);
-                console::puts("]\n");
-            }
-            StreamEvent::Done => {
-                console::puts("\n");
-                break;
-            }
-            StreamEvent::Error(e) => {
-                console::puts("\n  ai: error: ");
-                console::puts(match e {
-                    AgentError::Network(s)      => s,
-                    AgentError::Protocol(s)     => s,
-                    AgentError::Tool(s)         => s,
-                    AgentError::PolicyDenied    => "policy denied",
-                    AgentError::Interrupted     => "interrupted",
-                    AgentError::TokenBudget     => "token budget",
-                });
-                console::puts("\n");
-                break;
-            }
-        }
-    }
-    session.close();
-}
+// cmd_ai removed 2026-05-16 per SP-A2 (drop AGENT app). See ANTI_FEATURES.md
+// §ANTI-002 — AI in the kernel TCB is anti-feature for gov-grade positioning.
 
 /// Dump the security posture — single command that touches every
 /// module the cluster-A-through-H work shipped. Useful as a

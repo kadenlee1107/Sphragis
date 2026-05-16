@@ -1,5 +1,16 @@
 # DESIGN: Sphragis AI Agent — Locally-Hosted, Domain-Narrow, In-Kernel-Mediated
 
+> **HISTORICAL — REMOVED 2026-05-16**
+>
+> The AGENT app was removed from the Sphragis tree as part of SP-A2
+> in the gov-OS productization plan. AI-in-the-kernel-TCB is an
+> anti-feature for gov-grade positioning (see [ANTI_FEATURES.md](ANTI_FEATURES.md)
+> §ANTI-002). This document is preserved for historical context and
+> as design reference if a user-mode (out-of-TCB) variant is built
+> in the future for the `sphragis-community` profile.
+
+---
+
 **Status:** Active proposal as of 2026-05-08.
 **Follows:** `DESIGN_HTTPS_SYSCALL.md`, `DESIGN_TLS_HARDENING.md`, `DESIGN_NO_BROWSER.md`.
 **Touches:** new `src/ai/` module, `src/ui/shell.rs` (new `ai` command), `src/ui/desktop.rs` (new agent panel), `src/net/cave_policy.rs` (new policy entry for the inference host), `scripts/qemu_ai_smoke.py` (new), `Cargo.toml` (likely no new in-kernel deps — agent is plain Rust).

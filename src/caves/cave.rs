@@ -2321,7 +2321,7 @@ fn reset_all_globals_for_cave_switch() {
     // last-previewed file bytes, audit-chain head hash, half-typed
     // new-cave name, mis-routed Cocoa-tablet keystrokes, clipboard
     // contents) all leak to the next cave's first paint.
-    crate::ui::apps::agent::reset_for_cave_switch();
+    // agent::reset_for_cave_switch removed 2026-05-16 per SP-A2 (AGENT dropped).
     crate::ui::apps::editor::reset_for_cave_switch();
     crate::ui::apps::filemanager::reset_for_cave_switch();
     crate::ui::apps::security::reset_for_cave_switch();

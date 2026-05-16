@@ -25,7 +25,8 @@ pub enum AppId {
     Shell    = 4,
     Editor   = 5,
     Comms    = 6,
-    Agent    = 7,
+    // Agent (slot 7) removed 2026-05-16 per SP-A2: AI-in-the-kernel-TCB
+    // is anti-feature ANTI-002 for gov-grade positioning.
 }
 
 /// Result of an app's input handler. Tri-state so the desktop knows
@@ -54,9 +55,9 @@ pub struct AppDescriptor {
 fn default_handle_key(_c: u8) -> AppEvent { AppEvent::Unhandled }
 fn default_handle_click(_mx: i32, _my: i32, _rect: WindowRect) -> AppEvent { AppEvent::Unhandled }
 
-const _: () = assert!(APPS.len() == 8, "APPS length must match AppId variant count");
+const _: () = assert!(APPS.len() == 7, "APPS length must match AppId variant count");
 
-pub static APPS: [AppDescriptor; 8] = [
+pub static APPS: [AppDescriptor; 7] = [
     AppDescriptor { id: AppId::Caves,    label: "CAVES",    title: "CAVES",    paint: paint_caves,    handle_key: crate::ui::apps::caves_mgr::handle_key, handle_click: crate::ui::apps::caves_mgr::handle_click },
     AppDescriptor { id: AppId::Files,    label: "FILES",    title: "FILES",    paint: paint_files,    handle_key: crate::ui::apps::filemanager::handle_key, handle_click: crate::ui::apps::filemanager::handle_click },
     AppDescriptor { id: AppId::Net,      label: "NET",      title: "NET",      paint: paint_net,      handle_key: crate::ui::apps::netmon::handle_key, handle_click: crate::ui::apps::netmon::handle_click },
@@ -64,7 +65,6 @@ pub static APPS: [AppDescriptor; 8] = [
     AppDescriptor { id: AppId::Shell,    label: "SHELL",    title: "SHELL",    paint: paint_shell,    handle_key: crate::ui::shell::handle_key, handle_click: crate::ui::shell::handle_click },
     AppDescriptor { id: AppId::Editor,   label: "EDITOR",   title: "EDITOR",   paint: paint_editor,   handle_key: crate::ui::apps::editor::handle_key, handle_click: crate::ui::apps::editor::handle_click },
     AppDescriptor { id: AppId::Comms,    label: "COMMS",    title: "COMMS",    paint: paint_comms,    handle_key: crate::ui::apps::comms::handle_key, handle_click: crate::ui::apps::comms::handle_click },
-    AppDescriptor { id: AppId::Agent,    label: "AGENT",    title: "AGENT",    paint: paint_agent,    handle_key: crate::ui::apps::agent::handle_key, handle_click: crate::ui::apps::agent::handle_click },
 ];
 
 pub fn descriptor(id: AppId) -> &'static AppDescriptor {
@@ -80,5 +80,3 @@ fn paint_security(rect: WindowRect) { crate::ui::apps::security::paint(rect); }
 fn paint_shell(rect: WindowRect)    { crate::ui::shell::paint(rect); }
 fn paint_editor(rect: WindowRect)   { crate::ui::apps::editor::paint(rect); }
 fn paint_comms(rect: WindowRect)    { crate::ui::apps::comms::paint(rect); }
-
-fn paint_agent(rect: WindowRect)    { crate::ui::apps::agent::paint(rect); }
