@@ -743,13 +743,18 @@ pub fn declassify(name: &str, new_sens: u8, new_integ: u8) -> Result<(u8, u8), &
         let mut tag_bytes = [0u8; 16];
         tag_bytes.copy_from_slice(&entry.hash[..16]);
         let tag: &chacha20poly1305::Tag = (&tag_bytes).into();
-        let mut aad_old = [0u8; MAX_FILENAME + 2];
+        // AUDIT-FS-C4 (2026-05-15): nonce bound into AAD for both
+        // the decrypt-under-old-labels and encrypt-under-new-labels
+        // legs. See create() comment for rationale.
+        let mut aad_old = [0u8; MAX_FILENAME + 2 + 12];
         aad_old[..full_name.len()].copy_from_slice(full_name.as_bytes());
         aad_old[full_name.len()]     = entry.sensitivity;
         aad_old[full_name.len() + 1] = entry.integrity;
+        aad_old[full_name.len() + 2 .. full_name.len() + 14]
+            .copy_from_slice(&entry.nonce);
         cipher.decrypt_in_place_detached(
             (&entry.nonce).into(),
-            &aad_old[..full_name.len() + 2],
+            &aad_old[..full_name.len() + 14],
             &mut buf[..entry.size],
             tag,
         ).map_err(|_| "declassify: current AEAD verify failed")?;
@@ -759,13 +764,15 @@ pub fn declassify(name: &str, new_sens: u8, new_integ: u8) -> Result<(u8, u8), &
         let new_nonce_full = next_nonce();
         let mut new_nonce = [0u8; 12];
         new_nonce.copy_from_slice(&new_nonce_full[..12]);
-        let mut aad_new = [0u8; MAX_FILENAME + 2];
+        let mut aad_new = [0u8; MAX_FILENAME + 2 + 12];
         aad_new[..full_name.len()].copy_from_slice(full_name.as_bytes());
         aad_new[full_name.len()]     = new_sens;
         aad_new[full_name.len() + 1] = new_integ;
+        aad_new[full_name.len() + 2 .. full_name.len() + 14]
+            .copy_from_slice(&new_nonce);
         let new_tag = cipher.encrypt_in_place_detached(
             (&new_nonce).into(),
-            &aad_new[..full_name.len() + 2],
+            &aad_new[..full_name.len() + 14],
             &mut buf[..plain_len],
         ).map_err(|_| "declassify: re-encrypt failed")?;
 
@@ -993,11 +1000,23 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         // bound into the ciphertext.
         let sens_byte  = crate::caves::cave::active_sensitivity() as u8;
         let integ_byte = crate::caves::cave::active_integrity()   as u8;
-        let mut aad = [0u8; MAX_FILENAME + 2];
+        // AUDIT-FS-C4 (2026-05-15): bind the per-file nonce into AAD.
+        // Prior AAD = filename || sens || integ. Without the nonce in
+        // AAD, an attacker who can corrupt the inode's stored nonce
+        // (without knowing the master key) could force same-key /
+        // same-nonce reuse against an older ciphertext with the same
+        // filename — Poly1305 key-recovery attack. With the nonce in
+        // AAD, changing the stored nonce changes the AAD at decrypt
+        // time and the AEAD tag check fails.
+        // New AAD = filename || sens || integ || nonce(12). 15 bytes
+        // tail on top of filename. Breaks compat with pre-FS-C4
+        // ciphertexts — acceptable pre-production.
+        let mut aad = [0u8; MAX_FILENAME + 2 + 12];
         aad[..name.len()].copy_from_slice(name.as_bytes());
         aad[name.len()]     = sens_byte;
         aad[name.len() + 1] = integ_byte;
-        let aad_slice = &aad[..name.len() + 2];
+        aad[name.len() + 2 .. name.len() + 14].copy_from_slice(&nonce);
+        let aad_slice = &aad[..name.len() + 14];
 
         // Copy plaintext into allocated memory, then encrypt in place.
         let dest = data_addr as *mut u8;
@@ -1108,11 +1127,14 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
             Err(_) => return Err("internal: tag slice"),
         };
         let tag: &chacha20poly1305::Tag = (&tag_bytes).into();
-        let mut aad = [0u8; MAX_FILENAME + 2];
+        // AUDIT-FS-C4 (2026-05-15): nonce bound into AAD, must
+        // mirror the create-side construction. See create() comment.
+        let mut aad = [0u8; MAX_FILENAME + 2 + 12];
         aad[..name.len()].copy_from_slice(name.as_bytes());
         aad[name.len()]     = entry.sensitivity;
         aad[name.len() + 1] = entry.integrity;
-        let aad_slice = &aad[..name.len() + 2];
+        aad[name.len() + 2 .. name.len() + 14].copy_from_slice(&entry.nonce);
+        let aad_slice = &aad[..name.len() + 14];
         cipher.decrypt_in_place_detached(
                 (&entry.nonce).into(),
                 aad_slice,
