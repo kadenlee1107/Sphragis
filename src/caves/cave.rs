@@ -1037,9 +1037,40 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 // Track which Cave is currently active (for syscall capability checks)
 static ACTIVE_CAVE_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
 
-/// Set the active cave (called when entering a cave).
-pub fn set_active(id: usize) {
+/// AUDIT-CAVE-H4 (2026-05-16): now `pub(crate)` so external callers
+/// can no longer mutate ACTIVE_CAVE_ID directly — the only sanctioned
+/// way to change the active cave is through `enter()` / `start()`,
+/// which run the TE gate and L1 swap. A non-cave shell command that
+/// changed `set_active(target)` and then called a syscall could
+/// previously impersonate that cave's capabilities without ever
+/// entering it. In-crate paths (start, exit, persist::restore) keep
+/// access; the cave-policy self-test in shell.rs goes through the
+/// new `te_selftest_simulate_enter()` helper below.
+pub(crate) fn set_active(id: usize) {
     ACTIVE_CAVE_ID.store(id, Ordering::Relaxed);
+}
+
+/// Self-test escape hatch for the shell `te-test` command (step 6).
+/// Spoofs the active cave id to `from_id`, calls `enter(target_name)`
+/// inside an enabled-TE window, then restores both the active id and
+/// the te-enforced flag. Gated to refuse once TE is already enabled
+/// in the running system — in production the operator turns TE on
+/// and this helper becomes inert, so it can't be re-purposed as a
+/// privilege-escalation primitive.
+pub fn te_selftest_simulate_enter(
+    from_id: u16,
+    target_name: &str,
+) -> Result<(), &'static str> {
+    if te_enforced() {
+        return Err("te: self-test refused — already enforced");
+    }
+    let prev_active = get_active();
+    set_active(from_id as usize);
+    te_enable();
+    let result = enter(target_name);
+    te_disable();
+    set_active(prev_active);
+    result
 }
 
 /// Get the active cave ID (usize::MAX = none active).

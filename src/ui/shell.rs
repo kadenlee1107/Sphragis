@@ -9357,20 +9357,15 @@ fn cmd_te_selftest() {
 
     // (6) cave::enter integration: with te enforced and no rule,
     // attempting to enter a cave from a non-admin source fails.
-    // We simulate "non-admin source" by temporarily pinning
-    // ACTIVE_CAVE_ID to te_a via `set_active`, then calling
-    // `enter("te_b")`. (Direct API exercise; normal callers
-    // wouldn't do this either, but it proves the gate.)
-    cave::set_active(a_id as usize);
-    cave::te_enable();
-    match cave::enter("te_b") {
+    // Routed through cave::te_selftest_simulate_enter (post-Cave-H4
+    // hardening) — that helper owns the active-id spoof + te_enable
+    // and refuses to run if TE is already enforced in production.
+    match cave::te_selftest_simulate_enter(a_id, "te_b") {
         Err("te: transition denied") => {
             console::puts("  ✓ cave::enter from te_a -> te_b: te: transition denied\n");
         }
         Ok(()) => {
             console::puts("  ✗ FAIL: enter succeeded with TE enforced and no rule\n");
-            cave::te_disable();
-            cave::set_active(usize::MAX);
             cave::clear_transition_rules();
             let _ = cave::destroy("te_a");
             let _ = cave::destroy("te_b");
@@ -9378,16 +9373,12 @@ fn cmd_te_selftest() {
         }
         Err(e) => {
             console::puts("  ✗ FAIL: wrong error: "); console::puts(e); console::puts("\n");
-            cave::te_disable();
-            cave::set_active(usize::MAX);
             cave::clear_transition_rules();
             let _ = cave::destroy("te_a");
             let _ = cave::destroy("te_b");
             return;
         }
     }
-    cave::te_disable();
-    cave::set_active(usize::MAX);
     cave::clear_transition_rules();
     let _ = cave::destroy("te_a");
     let _ = cave::destroy("te_b");
