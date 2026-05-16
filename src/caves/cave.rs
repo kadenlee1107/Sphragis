@@ -1002,12 +1002,34 @@ impl Cave {
     }
 }
 
-// Global registry
+// Global registry.
 //
-// Phase 6: made `pub` so the shell can read per-cave backing/image
-// via `cave::CAVES[id].is_docker()` when routing `caves run/destroy`.
-// All mutation still goes through the pub fns in this file.
-pub static mut CAVES: [Cave; MAX_CAVES] = [const { Cave::empty() }; MAX_CAVES];
+// AUDIT-CAVE-M4 (2026-05-16): visibility narrowed from `pub` to
+// `pub(crate)`. Prior `pub static mut CAVES` let any code that
+// could `use crate::caves::cave;` take `&mut CAVES[i]` and mutate
+// `.caps`, `.cap_count`, `.fs_key`, `.sensitivity` directly. The
+// audit's concern: in a microkernel security model, the kernel
+// capability set should be in a region not writable by arbitrary
+// EL1 code — only by the cap-mediation module here.
+//
+// A true full fix would mark the CAVES region read-only at the
+// page-table level and gate writes through a transition. That's
+// substantial RX/RW segregation work. The minimum-impact fix this
+// commit lands: drop the public visibility so out-of-crate callers
+// can no longer take direct mut refs, then expose narrow read-only
+// accessors (`cave::is_docker(id)`, etc.) for the legitimate
+// external consumers. Mutation paths stay in-crate (persist.rs
+// restore is the only legitimate writer).
+pub(crate) static mut CAVES: [Cave; MAX_CAVES] = [const { Cave::empty() }; MAX_CAVES];
+
+/// AUDIT-CAVE-M4: narrow read-only accessor. Returns whether the
+/// cave at `id` is configured as a docker-cave. Used by the shell's
+/// `caves run/destroy` dispatch which previously read `CAVES[id]`
+/// directly.
+pub fn is_docker(id: usize) -> bool {
+    if id >= MAX_CAVES { return false; }
+    unsafe { (*core::ptr::addr_of!(CAVES))[id].is_docker() }
+}
 
 static CAVE_COUNT: AtomicU8 = AtomicU8::new(0);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);

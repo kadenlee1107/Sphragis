@@ -83,6 +83,14 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 # (encrypt-then-MAC) with a single AEAD primitive: one pass,
 # constant-time by design, no timing side channels on the key.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# AUDIT-FS-C4 elite-tier (2026-05-16): misuse-resistant AEAD for
+# BatFS at-rest encryption. AES-GCM-SIV defends against nonce reuse
+# in a way plain AES-GCM and ChaCha20-Poly1305 do not — if a nonce
+# IS reused (operator bug, RAM corruption flipping the stored
+# prefix, etc.), authenticity holds and only the two reused-nonce
+# plaintexts leak (not the keystream). RustCrypto crate, no_std-
+# compatible with default-features off.
+aes-gcm-siv = { version = "0.11", default-features = false, features = ["aes"] }
 # DESIGN_CRYPTO.md priority #5 + #6: post-quantum KEM + signatures.
 # Hybrid construction — X25519 || ML-KEM-768 for key agreement,
 # Ed25519 || ML-DSA-65 for signatures — gives us classical security
