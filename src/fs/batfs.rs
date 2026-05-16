@@ -12,10 +12,30 @@
 
 use crate::crypto::sha256;
 use crate::kernel::mm::frame;
-use chacha20poly1305::{
+// AUDIT-FS-C4 elite-tier (2026-05-16): migrate BatFS from
+// ChaCha20-Poly1305 to AES-256-GCM-SIV. Same 32-byte key, same
+// 12-byte nonce, same 16-byte tag — drop-in API replacement.
+// GCM-SIV is misuse-resistant: if a nonce IS reused (operator
+// bug, RAM corruption flipping the stored prefix, etc.),
+// authenticity holds and only the two reused-nonce plaintexts
+// leak (not the keystream). ChaCha20-Poly1305 catastrophically
+// failed under nonce reuse — same-key+nonce twice → Poly1305 key
+// recovery → forgery. The Week-2 FS-C4 fix bound the nonce into
+// AAD as a stopgap; GCM-SIV makes the underlying primitive
+// inherently safer.
+//
+// Pre-FS-C4-Week-8 ciphertexts (still ChaCha-Poly1305) will fail
+// AEAD verify on read. Acceptable pre-production. Real-deployment
+// migration would need a version byte in the inode + dual-AEAD
+// decrypt path; for now the disk is non-persistent across builds.
+use aes_gcm_siv::{
     aead::{AeadInPlace, KeyInit},
-    ChaCha20Poly1305,
+    Aes256GcmSiv,
 };
+// Type alias to minimize the diff against the prior code shape.
+type Cipher = Aes256GcmSiv;
+// Tag type re-export so the existing `&Cipher::Tag` casts work.
+type AeadTag = aes_gcm_siv::Tag;
 
 const MAX_FILES: usize = 128;
 const MAX_FILENAME: usize = 64;
@@ -739,10 +759,10 @@ pub fn declassify(name: &str, new_sens: u8, new_integ: u8) -> Result<(u8, u8), &
         let src = entry.data_addr as *const u8;
         unsafe { core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), entry.size); }
         let file_key = derive_file_key(full_name);
-        let cipher = ChaCha20Poly1305::new(&file_key.into());
+        let cipher = Cipher::new(&file_key.into());
         let mut tag_bytes = [0u8; 16];
         tag_bytes.copy_from_slice(&entry.hash[..16]);
-        let tag: &chacha20poly1305::Tag = (&tag_bytes).into();
+        let tag: &AeadTag = (&tag_bytes).into();
         // AUDIT-FS-C4 (2026-05-15): nonce bound into AAD for both
         // the decrypt-under-old-labels and encrypt-under-new-labels
         // legs. See create() comment for rationale.
@@ -989,7 +1009,7 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         // * Output — ciphertext (same length as plaintext) + 16-byte
         // Poly1305 authentication tag stored in entry.hash[..16].
         let file_key = derive_file_key(name);
-        let cipher = ChaCha20Poly1305::new(&file_key.into());
+        let cipher = Cipher::new(&file_key.into());
         let nonce_full = next_nonce();
         // entry.nonce is 12 bytes already (ChaCha20-Poly1305 native size)
         let mut nonce: [u8; 12] = [0; 12];
@@ -1121,12 +1141,12 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
         // cryptographically bound: tamper-and-bypass requires the
         // file key (which would also let them just decrypt).
         let file_key = derive_file_key(name);
-        let cipher = ChaCha20Poly1305::new(&file_key.into());
+        let cipher = Cipher::new(&file_key.into());
         let tag_bytes: [u8; 16] = match entry.hash[..16].try_into() {
             Ok(b) => b,
             Err(_) => return Err("internal: tag slice"),
         };
-        let tag: &chacha20poly1305::Tag = (&tag_bytes).into();
+        let tag: &AeadTag = (&tag_bytes).into();
         // AUDIT-FS-C4 (2026-05-15): nonce bound into AAD, must
         // mirror the create-side construction. See create() comment.
         let mut aad = [0u8; MAX_FILENAME + 2 + 12];
