@@ -5,6 +5,7 @@ pub mod blake3;
 pub mod chacha20poly1305;
 pub mod gcm_verified;
 pub mod hotp;
+pub mod pq_cnsa;
 pub mod pq_hybrid;
 pub mod pq_hybrid_sig;
 pub mod rng;
@@ -48,6 +49,15 @@ pub fn run_self_tests() -> Result<(), &'static str> {
 
     // AES-128 + AES-256 GCM (NIST SP 800-38D) via existing selftest.
     gcm_verified::selftest()?;
+
+    // ML-KEM-1024 (FIPS 203) round-trip KAT — CNSA 2.0 PQ-KEM at
+    // category 5. Covers REQ-CRY-001. Generate → encapsulate →
+    // decapsulate → shared secrets must match.
+    pq_cnsa::kat_mlkem1024()?;
+
+    // ML-DSA-87 (FIPS 204) sign-verify + tamper-detect KAT — CNSA 2.0
+    // PQ signature at category 5. Covers REQ-CRY-002.
+    pq_cnsa::kat_mldsa87()?;
 
     // ChaCha20-Poly1305 — encrypt-then-decrypt round trip + tamper
     // detection on a fixed (key, nonce, ad, pt). Catches codegen
