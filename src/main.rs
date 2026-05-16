@@ -193,6 +193,15 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // V4: probe ARMv8.5 RNDR hardware RNG and wire it into crypto::rng.
     crypto::rng::probe_hw_rng();
 
+    // AUDIT-MEM-H2 (2026-05-15): seed __stack_chk_guard from RNDR
+    // immediately after the RNG is probed. The compiler emits canary
+    // reads on every function with -Z stack-protector=all; until this
+    // call runs the canary is the predictable build-time constant
+    // 0xdead_beef_cafe_babe. Must precede any function whose epilogue
+    // checks the canary — i.e. before the first non-inlined call into
+    // any subsystem.
+    unsafe { kernel::stack_chk::seed_from_rng(); }
+
     // DESIGN_CRYPTO.md #11+#12: seed the OTP pad with fresh true-random
     // bytes from the RNDR-backed CSPRNG. Tokens can then be dumped via
     // `otp-dump` shell command at provisioning for operator to record

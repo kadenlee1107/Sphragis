@@ -37,27 +37,35 @@ pub extern "C" fn __stack_chk_fail() -> ! {
     }
 }
 
-/// Optionally called from `kernel_main` early in boot to seed the
-/// canary from the hardware RNG so it isn't a predictable constant.
-/// Safe to call exactly once before any function that touches it.
-#[allow(dead_code)]
+/// Called from `kernel_main` early in boot to seed the canary from
+/// the hardware RNG so it isn't a predictable constant. Safe to call
+/// exactly once before any function that touches it.
+///
+/// AUDIT-MEM-H2 (2026-05-15): wired into kernel_main right after
+/// `crypto::rng::probe_hw_rng()`. Prior to this commit the function
+/// existed but had zero call sites; the canary was the literal
+/// `0xdead_beef_cafe_babe`, making the mitigation structurally
+/// disabled.
 pub unsafe fn seed_from_rng() {
+    // Use the raw RNDR encoding (s3_3_c2_c4_0) — symbolic `RNDR`
+    // requires the v8.5 target-feature flag which isn't enabled in
+    // .cargo/config. The same encoding is used by crypto::rng.
     let mut v: u64 = 0;
-    // ARMv8.5 RNDR. Returns 0 on failure; we mix in a fallback
-    // counter so we still have entropy if RNDR isn't usable.
-    let nzcv: u64;
+    let ok: u64;
     unsafe {
         core::arch::asm!(
-            "mrs {0}, RNDR",
-            "mrs {1}, NZCV",
-            out(reg) v,
-            out(reg) nzcv,
+            "mrs {v}, s3_3_c2_c4_0",    // RNDR (ARMv8.5)
+            "cset {ok}, ne",             // NZCV.Z clear ⇒ success
+            v = out(reg) v,
+            ok = out(reg) ok,
+            options(nostack, preserves_flags),
         );
     }
-    if (nzcv >> 30) & 1 == 1 {
-        // RNDR returned 0; fall back to cntpct mix.
+    if ok == 0 {
+        // RNDR transiently unavailable; fall back to cntpct mix.
         let t: u64;
-        unsafe { core::arch::asm!("mrs {0}, cntpct_el0", out(reg) t); }
+        unsafe { core::arch::asm!("mrs {0}, cntpct_el0", out(reg) t,
+                                  options(nostack, preserves_flags)); }
         v = t ^ 0xc6bc_279e_a6a8_8d57;
     }
     // Avoid 0 — some libc impls treat 0 as "uninitialized."
