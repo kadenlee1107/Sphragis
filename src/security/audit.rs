@@ -72,6 +72,39 @@ pub enum Category {
     /// AUDIT-CAVE-M2: TPI-quorum operations — the operator-action
     /// approval channel for high-consequence ops like wipe.
     TpiOp       = 18,
+    /// SP-AUD-003: NIAP GPOSPP FAU_GEN.1.1.b "authentication unlock
+    /// events" — sessions opened, sessions closed, lockouts cleared.
+    /// Distinct from `Auth` (which is the login-attempt event itself);
+    /// `AuthSession` is the lifecycle of an authenticated session.
+    AuthSession = 19,
+    /// SP-AUD-003: NIAP GPOSPP FAU_GEN.1.1.b "privilege escalation"
+    /// events — capability grant, role change, TPI-approved one-shot
+    /// privileged operation. Distinct from `TpiOp` (which records the
+    /// quorum-approval event) — `PrivEsc` records the *use* of the
+    /// granted privilege.
+    PrivEsc     = 20,
+    /// SP-AUD-003: NIAP GPOSPP FAU_GEN.1.1.b "loadable software"
+    /// events — kernel module load / unload, package install, package
+    /// uninstall, signature-verify outcome on a loadable artifact.
+    LoadableMod = 21,
+    /// SP-AUD-003: NIAP GPOSPP FAU_GEN.1.1.b "trusted update" events —
+    /// kernel image update applied, rollback, signature-verify outcome
+    /// on a trusted-update artifact. Distinct from `LoadableMod`
+    /// (per-module) — `UpdateApply` covers whole-system updates.
+    UpdateApply = 22,
+    /// SP-AUD-003: NIAP GPOSPP FAU_GEN.1.1.b "configurable file
+    /// access" — file open/create/delete events where the operator has
+    /// explicitly subscribed that path/inode to audit. Not every file
+    /// access (too noisy); only subscribed paths. The default-deny
+    /// state is "not audited"; operator opts-in via cave-policy.
+    FileAccess  = 23,
+    /// SP-C1.x: attestation surface events — quote produced, quote
+    /// verified, attestation-key rotated, endorsement-chain failure.
+    /// Audit-trail for the kernel-mediated attestation primitive
+    /// (REQ-ATT-001) so an external verifier can cross-check
+    /// quote-issuance frequency against the platform's claimed
+    /// activity.
+    Attest      = 24,
 }
 
 impl Category {
@@ -95,6 +128,12 @@ impl Category {
             Category::Fs        => "fs",
             Category::KeyRotate => "keyrot",
             Category::TpiOp     => "tpi",
+            Category::AuthSession => "session",
+            Category::PrivEsc     => "privesc",
+            Category::LoadableMod => "loadmod",
+            Category::UpdateApply => "update",
+            Category::FileAccess  => "filea",
+            Category::Attest      => "attest",
         }
     }
 }
@@ -481,16 +520,23 @@ pub fn restore_from_persisted(buf: &[u8]) -> usize {
         // Map cat name back to enum byte. The serialize side uses
         // these short names; keep both sides in sync.
         let cat = match cat_bytes {
-            b"fetch"  => Category::Fetch as u8,
-            b"script" => Category::Script as u8,
-            b"click"  => Category::Click as u8,
-            b"nav"    => Category::Nav as u8,
-            b"form"   => Category::FormSubmit as u8,
-            b"mode"   => Category::Mode as u8,
-            b"auth"   => Category::Auth as u8,
-            b"boot"   => Category::Boot as u8,
-            b"cave"   => Category::Cave as u8,
-            b"ai"     => Category::Ai as u8,
+            b"fetch"   => Category::Fetch as u8,
+            b"script"  => Category::Script as u8,
+            b"click"   => Category::Click as u8,
+            b"nav"     => Category::Nav as u8,
+            b"form"    => Category::FormSubmit as u8,
+            b"mode"    => Category::Mode as u8,
+            b"auth"    => Category::Auth as u8,
+            b"boot"    => Category::Boot as u8,
+            b"cave"    => Category::Cave as u8,
+            b"ai"      => Category::Ai as u8,
+            // SP-AUD-003: NIAP FAU_GEN.1 categories
+            b"session" => Category::AuthSession as u8,
+            b"privesc" => Category::PrivEsc as u8,
+            b"loadmod" => Category::LoadableMod as u8,
+            b"update"  => Category::UpdateApply as u8,
+            b"filea"   => Category::FileAccess as u8,
+            b"attest"  => Category::Attest as u8,
             _ => continue,
         };
 
