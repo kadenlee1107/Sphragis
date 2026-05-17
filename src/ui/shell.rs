@@ -10804,14 +10804,15 @@ fn cleanup_declassify(sys_wg_id: u16) {
 fn print_err(e: crate::caves::mls_ipc::MlsIpcError) {
     use crate::caves::mls_ipc::MlsIpcError;
     console::puts(match e {
-        MlsIpcError::WriteDown => "WriteDown\n",
-        MlsIpcError::ReadUp    => "ReadUp\n",
-        MlsIpcError::WriteUp   => "WriteUp\n",
-        MlsIpcError::ReadDown  => "ReadDown\n",
-        MlsIpcError::Empty     => "Empty\n",
-        MlsIpcError::BadId     => "BadId\n",
-        MlsIpcError::TooLong   => "TooLong\n",
-        MlsIpcError::AeadFail  => "AeadFail\n",
+        MlsIpcError::WriteDown      => "WriteDown\n",
+        MlsIpcError::ReadUp         => "ReadUp\n",
+        MlsIpcError::WriteUp        => "WriteUp\n",
+        MlsIpcError::ReadDown       => "ReadDown\n",
+        MlsIpcError::Empty          => "Empty\n",
+        MlsIpcError::BadId          => "BadId\n",
+        MlsIpcError::TooLong        => "TooLong\n",
+        MlsIpcError::AeadFail       => "AeadFail\n",
+        MlsIpcError::PolicyRejected => "PolicyRejected (gov-strict)\n",
     });
 }
 

@@ -169,6 +169,12 @@ pub enum MlsIpcError {
     /// with at rest. Returned by `recv` instead of delivering a
     /// possibly-downgraded message.
     AeadFail,
+    /// SP-B1.6.2 (2026-05-16): gov-strict policy rejected the AEAD
+    /// primitive used by MLS IPC (plain ChaCha20-Poly1305 — not on
+    /// the CNSA 2.0 allowlist). Future SP-B1.6.3 may add an
+    /// AES-256-GCM-SIV-backed MLS IPC variant; until then, MLS IPC
+    /// is community-build-only.
+    PolicyRejected,
 }
 
 /// Send `body` from `sender_id` to `receiver_id`. The message is
@@ -195,6 +201,16 @@ pub fn send(sender_id: u16, receiver_id: u16, body: &[u8]) -> Result<usize, MlsI
     if !cave::can_flow_integrity(s_integ, r_integ, MlsOp::Write) {
         REJECT_WRITE_UP.fetch_add(1, Ordering::Relaxed);
         return Err(MlsIpcError::WriteUp);
+    }
+
+    // SP-B1.6.2 (2026-05-16): policy gate. Under gov-strict, plain
+    // ChaCha20-Poly1305 is rejected outside CNSA-grade context. MLS
+    // IPC fails-closed under gov-strict until SP-B1.6.3 adds a
+    // CNSA-eligible AES-256-GCM-SIV variant.
+    if crate::crypto::policy::ensure_permitted(
+        crate::crypto::policy::Algo::ChaCha20Poly1305,
+    ).is_err() {
+        return Err(MlsIpcError::PolicyRejected);
     }
 
     // Seal the body with ChaCha20-Poly1305: AAD = sender || sens ||
@@ -276,6 +292,13 @@ pub fn recv(receiver_id: u16, out: &mut [u8]) -> Result<(u16, u8, usize), MlsIpc
         // honour the tampered labels. Decrypts into a local
         // buffer first so a tampered ciphertext doesn't leak
         // half-plaintext to the caller.
+        // SP-B1.6.2: mirror the send-side gate. Under gov-strict,
+        // never decrypt with a rejected primitive.
+        if crate::crypto::policy::ensure_permitted(
+            crate::crypto::policy::Algo::ChaCha20Poly1305,
+        ).is_err() {
+            return Err(MlsIpcError::PolicyRejected);
+        }
         let aad = aad_for(m.sender_id, m.sensitivity, m.integrity);
         let key = mls_ipc_key();
         let cipher = ChaCha20Poly1305::new(&key.into());
