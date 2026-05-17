@@ -905,6 +905,32 @@ fn verify_signed_by(
     const RSA_PSS:           &[u8] =
         &[0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x0A];
 
+    // SP-B1.6.1 (2026-05-16): gate every X.509 signature-algorithm
+    // selection through the gov-strict policy. Under community build,
+    // policy::ensure_permitted is a no-op (returns Ok for all algos).
+    // Under gov-strict, RSA + ECDSA signature-alg paths are rejected
+    // — gov X.509 chains must use ML-DSA-87 signatures (FIPS 204),
+    // which our trust-anchor set doesn't include yet (SP-CRT-002
+    // replaces the RSA-rooted trust anchors with PQ-rooted ones).
+    // Until that lands, gov-strict TLS handshakes fail-closed at the
+    // first RSA / ECDSA cert verify with VerifyError::UnsupportedSigAlg.
+    // Map sig OID -> policy algo enum. Unknown OIDs return None and
+    // skip the gate (the existing if/else cascade below catches them
+    // with VerifyError::UnsupportedSigAlg).
+    let policy_algo: Option<crate::crypto::policy::Algo> =
+        if sig_oid == ECDSA_SHA256       { Some(crate::crypto::policy::Algo::EcdsaP256Sha256) }
+        else if sig_oid == ECDSA_SHA384  { Some(crate::crypto::policy::Algo::EcdsaP384Sha384) }
+        else if sig_oid == RSA_PKCS1V15_SHA256 { Some(crate::crypto::policy::Algo::RsaPkcs1Sha256) }
+        else if sig_oid == RSA_PKCS1V15_SHA384 { Some(crate::crypto::policy::Algo::RsaPkcs1Sha384) }
+        else if sig_oid == RSA_PKCS1V15_SHA512 { Some(crate::crypto::policy::Algo::RsaPkcs1Sha512) }
+        else if sig_oid == RSA_PSS       { Some(crate::crypto::policy::Algo::RsaPssSha256) }
+        else { None };
+    if let Some(algo) = policy_algo
+        && crate::crypto::policy::ensure_permitted(algo).is_err()
+    {
+        return Err(VerifyError::UnsupportedSigAlg);
+    }
+
     if sig_oid == ECDSA_SHA256 {
         let digest = crate::crypto::sig::sha256_digest(&tbs);
         crate::crypto::sig::ecdsa_p256_verify(parent_spki, &digest, sig_bytes)
