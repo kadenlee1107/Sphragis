@@ -1,3 +1,4 @@
+pub mod attest;
 pub mod audit;
 pub mod audit_chain;
 pub mod audit_forwarder;

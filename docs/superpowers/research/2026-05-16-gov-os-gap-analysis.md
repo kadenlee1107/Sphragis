@@ -91,11 +91,11 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| ATT-001 | P0 | ❌ MISSING | No attestation API |
+| ATT-001 | P0 | ⚠️ PARTIAL | `src/security/attest.rs` (SP-C1.1) defines API: `Claims`, `Quote`, `KernelMeasurement`, `CaveIdentity`, `quote()`, `verify_quote_local()`. Signature is ML-DSA-87 (CNSA 2.0 cat-5). In-memory key today; hardware-rooted key chain is SP-C1.4 (SEP) / SP-C1.5 (Caliptra). `attest-smoke` shell command exercises round-trip + tamper-detect. |
 | ATT-002 | P0 | ❌ MISSING | No Caliptra integration |
 | ATT-003 | P0 | ❌ MISSING | No SEP attestation flow |
 | ATT-004 | P1 | ❌ MISSING | No TPM 2.0 integration |
-| ATT-005 | P0 | ❌ MISSING | No per-cave attestable identity |
+| ATT-005 | P0 | ⚠️ PARTIAL | `CaveIdentity` type defined (name + measurement). Stub single-slot registry via `set_local_cave_identity` for SP-C1.1 testing. SP-C1.3 wires per-cave-slot binding into `caves::cave` at create-time. |
 | ATT-006 | P0 | ❌ MISSING | No HSM-backed operator CA pattern |
 | ATT-007 | P1 | ❌ MISSING | No RATS protocol implementation |
 | ATT-008 | P2 | ❌ MISSING | No CVM attestation |
