@@ -885,10 +885,12 @@ fn derive_sealfs_key(passphrase: &[u8]) -> [u8; 32] {
     // produce different outputs for the same passphrase — domain
     // separation. bumps the version tag so anyone migrating
     // from the pre-Argon2 master key sees a clean break.
-    // Historical salt string from the Bat_OS naming era. Preserve
-    // the exact bytes so existing keystores still derive correctly
-    // after the SealFS rename.
-    const SALT: &[u8; 18] = b"sphragis-batfs-v3\0";
+    // Salt bumped to v4 on 2026-05-17 alongside the BATFS->SEALFS
+    // byte-constant rename. Different bytes from the v3 salt, so
+    // any pre-rename keystore derives different keys (which is fine
+    // — the disk magic also changed and pre-rename images won't
+    // mount). Pre-production: no shipped customer disks to break.
+    const SALT: &[u8; 19] = b"sphragis-sealfs-v4\0";
     const MEM_KIB: u32 = 8_192;       // 8 MiB
     const TIME_COST: u32 = 3;
     const PARALLELISM: u32 = 1;
@@ -921,12 +923,12 @@ fn derive_sealfs_key(passphrase: &[u8]) -> [u8; 32] {
 /// Domain-separated from the Argon2id output so an attacker who learns
 /// one cannot derive the other.
 fn derive_sealfs_key_sha_fallback(passphrase: &[u8]) -> [u8; 32] {
-    // Historical salt from the Bat_OS naming era. Preserve the exact
-    // bytes so that any existing keystore derived under the old name
-    // still validates after the SealFS rename — changing the salt
-    // would silently break passphrase-driven key derivation on every
-    // pre-existing installation.
-    const KERNEL_SALT: [u8; 16] = *b"batfs-fallback\0\0";
+    // Fallback salt renamed batfs-fallback -> sealfs-fallback on
+    // 2026-05-17 alongside the primary KDF salt bump. Same 16-byte
+    // length ("sealfs-fallback" = 15 chars + 1 NUL). Different bytes
+    // = different fallback keys for the same passphrase, which is
+    // the desired behavior post-rename.
+    const KERNEL_SALT: [u8; 16] = *b"sealfs-fallback\0";
 
     let mut buf = [0u8; 128];
     let n1 = passphrase.len().min(64);
