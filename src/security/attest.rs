@@ -393,7 +393,36 @@ pub fn cave_identity(cave_id: usize) -> Option<CaveIdentity> {
 /// Used by `quote()` (which calls with `cave::get_active()`) and by
 /// `smoke()` (which calls with a fixed cave_id, since the smoke
 /// harness runs without an active cave context).
+///
+/// Emits an `audit::Category::Attest` record on every invocation
+/// (both success and failure) per SP-AUD-003.1 — gives an external
+/// verifier the cross-check that quote-issuance frequency matches
+/// platform-claimed activity.
 pub fn quote_for_cave(
+    cave_id: usize,
+    nonce: &[u8; NONCE_LEN],
+    claims: Claims,
+) -> Result<Quote, &'static str> {
+    let result = quote_for_cave_inner(cave_id, nonce, claims);
+    let cat = crate::security::audit::Category::Attest;
+    match &result {
+        Ok(_)  => crate::security::audit::record(cat, b"quote produced"),
+        Err(e) => {
+            // The reason string is `&'static str` — safe to log.
+            let mut msg = [0u8; 96];
+            let prefix = b"quote failed: ";
+            let plen = prefix.len().min(msg.len());
+            msg[..plen].copy_from_slice(&prefix[..plen]);
+            let reason_bytes = e.as_bytes();
+            let copy = reason_bytes.len().min(msg.len() - plen);
+            msg[plen..plen + copy].copy_from_slice(&reason_bytes[..copy]);
+            crate::security::audit::record(cat, &msg[..plen + copy]);
+        }
+    }
+    result
+}
+
+fn quote_for_cave_inner(
     cave_id: usize,
     nonce: &[u8; NONCE_LEN],
     claims: Claims,
@@ -447,6 +476,25 @@ pub fn quote(nonce: &[u8; NONCE_LEN], claims: Claims) -> Result<Quote, &'static 
 /// (operator-CA-attested). SP-C1.6 wires the endorsement-chain
 /// validator.
 pub fn verify_quote_local(q: &Quote) -> Result<(), &'static str> {
+    let result = verify_quote_local_inner(q);
+    let cat = crate::security::audit::Category::Attest;
+    match &result {
+        Ok(()) => crate::security::audit::record(cat, b"quote verified ok"),
+        Err(e) => {
+            let mut msg = [0u8; 96];
+            let prefix = b"quote verify failed: ";
+            let plen = prefix.len().min(msg.len());
+            msg[..plen].copy_from_slice(&prefix[..plen]);
+            let reason_bytes = e.as_bytes();
+            let copy = reason_bytes.len().min(msg.len() - plen);
+            msg[plen..plen + copy].copy_from_slice(&reason_bytes[..copy]);
+            crate::security::audit::record(cat, &msg[..plen + copy]);
+        }
+    }
+    result
+}
+
+fn verify_quote_local_inner(q: &Quote) -> Result<(), &'static str> {
     if q.verifying_key.len() != MLDSA87_PK_LEN {
         return Err("attest: bad verifying key length");
     }
