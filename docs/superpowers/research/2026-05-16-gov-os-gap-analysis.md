@@ -183,7 +183,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | DOC-002 | P0 | ✅ HAVE | `docs/THREAT_MODEL.md` published (SP-DOC-002). 8 sections: assets (CSP/data/policy), 8 adversary capabilities (A1-A8), 10 attack surfaces (S1-S10) mapped to source-code regions, mitigations matrix (S×A), 7 residual risks with bounded scope + closure plans, 16-layer defense-in-depth summary. Consolidates the per-subsystem DESIGN_*.md threat-model fragments into AO-reviewable form. |
 | DOC-003 | P0 | ⚠️ PARTIAL | DESIGN docs exist (developer-facing); no AO-audience-formatted architecture doc |
 | DOC-004 | P0 | ❌ MISSING | No capability statement |
-| DOC-005 | P0 | ❌ MISSING | No Security Target |
+| DOC-005 | P0 | ✅ HAVE | `docs/SECURITY_TARGET.md` published (SP-DOC-005). CC:2022 Rev 1 Part 1 §B-conformant ST: §1 introduction, §2 conformance, §3 security problem (5 assumptions + 7 threats + 6 OSPs), §4 objectives (10 TOE + 5 environment), §5 extended components (FCS_QKD.1, FCS_PQS.1, FCS_SHB.1, FDP_CAV.1, FIA_ATTEST.1), §6 SFRs across FCS/FDP/FIA/FMT/FPT/FTA/FTP/FAU with Sphragis-fulfilment column, §7 SAR posture, §10 references. Lock document for the eventual CCTL engagement (SP-CRT-003). |
 | DOC-006 | P0 | ⚠️ PARTIAL | `docs/NIST_800_53_INHERITANCE.md` STARTER published (SP-DOC-006). ~40 of the most-asked OS-relevant controls covered across AC, AU, CM, IA, SC, SI, MP, SA, SR, PT families. 22 SATISFIED, 12 PARTIAL (each with named follow-up SP), 4 HYBRID, 2 CUSTOMER, 8 N/A. SP-DOC-006.FULL extends to the remaining ~110-160 OS-relevant controls. |
 | DOC-007 | P1 | ❌ MISSING | No STIG draft |
 | DOC-008 | P1 | ❌ MISSING | No USENIX-quality whitepaper |
