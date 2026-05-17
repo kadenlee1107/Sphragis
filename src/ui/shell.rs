@@ -8051,7 +8051,7 @@ fn cmd_audit_chain_selftest() {
         }
     }
     let clean_head_hash = chain_head();
-    if clean_head_hash == [0u8; 32] {
+    if clean_head_hash == [0u8; crate::security::audit_chain::CHAIN_HASH_LEN] {
         console::puts("  ✗ FAIL: chain_head is all-zero (chain not advancing)\n");
         return;
     }
