@@ -53,6 +53,12 @@ pub fn run_self_tests() -> Result<(), &'static str> {
     // AES-128 + AES-256 GCM (NIST SP 800-38D) via existing selftest.
     gcm_verified::selftest()?;
 
+    // SHA-384 FIPS 180-4 §F.4 "abc" KAT + HMAC-SHA-384 RFC 4231 §4.2
+    // TC1 vector (SP-B1.7; REQ-CRY-005, REQ-CRY-006). Covers the
+    // CNSA 2.0-preferred hash size + the most-used kernel MAC path
+    // (audit-chain HMAC switches SHA-256 -> SHA-384 in SP-C4.1).
+    sha384::kat()?;
+
     // SHA-512 FIPS 180-4 §F.3 "abc" KAT + HMAC-SHA-512 determinism
     // smoke (SP-B1.5 / SP-B1.7 partial; REQ-CRY-005).
     sha512::kat()?;

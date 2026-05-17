@@ -66,7 +66,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | CRY-003 | P0 | ⚠️ PARTIAL | LMS landed in `src/crypto/lms.rs` (SP-B1.3) via `hbs-lms` crate; KAT exposed as `lms-kat` shell command (too slow for boot-smoke window). XMSS still missing (SP-B1.4). |
 | CRY-004 | P0 | ⚠️ PARTIAL | AES-256 ubiquitous; policy gate landed in `src/crypto/policy.rs` via `gov-strict` feature flag (SP-B1.6); call-site sweep to route all algo selection through `policy::ensure_permitted` is SP-B1.6.1 follow-up |
 | CRY-005 | P0 | ⚠️ PARTIAL | `sha384.rs` + `sha512.rs` both exist (SP-B1.5); SHA-256 still default in many call sites (gov-build policy enforcement is SP-B1.6) |
-| CRY-006 | P0 | ⚠️ PARTIAL | Week 3-4 Crypto-F7 closed for SHA-256 + AES-GCM + ChaCha20-Poly1305 KATs; **extend to ML-KEM, ML-DSA, SHA-384, SHA-512, LMS/XMSS, HMAC-SHA-384** |
+| CRY-006 | P0 | ✅ HAVE | Boot KATs cover SHA-256, AES-128/256-GCM, ChaCha20-Poly1305 (week 3-4); SHA-512 + ML-KEM-1024 round-trip + ML-DSA-87 sign-verify+tamper (SP-B1.1/B1.2/B1.5); SHA-384 + HMAC-SHA-384 RFC 4231 (SP-B1.7); fail-closed RNG strict-probe (SP-B1.8). LMS KAT is shell-command-only due to QEMU keygen latency (~30-60s). XMSS deferred (SP-B1.4 blocked on upstream xmss crate not being no_std-clean). |
 | CRY-007 | P0 | ❌ MISSING | No documented FIPS-140-3 cryptographic-module boundary |
 | CRY-008 | P1 | ❌ MISSING | No lab engagement yet |
 | CRY-009 | P2 | ❌ MISSING | No hardware-bound key store yet |
