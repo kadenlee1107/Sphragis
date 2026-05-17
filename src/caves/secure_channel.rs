@@ -87,6 +87,17 @@ impl SecureChannel {
     /// The nonce itself is deterministic from (dir, seq); we include it
     /// explicitly in the frame so the wire format self-describes.
     pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+        // SP-B1.6.2 (2026-05-16): policy gate. Under gov-strict
+        // (`cargo build --features gov-strict`), plain
+        // ChaCha20-Poly1305 is rejected outside CNSA-grade context.
+        // Cave-to-cave secure-channel IPC is non-TLS but still
+        // operator-visible; future SP-B1.6.3 may relax this to allow
+        // ChaCha20-Poly1305 with documented CNSA-grade per-channel
+        // negotiation. Community build unaffected.
+        crate::crypto::policy::ensure_permitted(
+            crate::crypto::policy::Algo::ChaCha20Poly1305,
+        )?;
+
         let seq = self.out_counter;
         self.out_counter = self.out_counter.checked_add(1)
             .ok_or("secure_channel: outbound counter overflow")?;
@@ -110,6 +121,13 @@ impl SecureChannel {
     /// Open a frame. Enforces strict-monotonic seq on the in side,
     /// so replays / reorders are rejected.
     pub fn open(&mut self, frame: &[u8]) -> Result<Vec<u8>, &'static str> {
+        // SP-B1.6.2 (2026-05-16): mirror the gate from seal(). Open()
+        // would still decrypt a frame validly under gov-strict but
+        // the channel itself is non-CNSA; fail-closed early.
+        crate::crypto::policy::ensure_permitted(
+            crate::crypto::policy::Algo::ChaCha20Poly1305,
+        )?;
+
         if frame.len() < HEADER_LEN + TAG_LEN {
             return Err("secure_channel: frame too short");
         }

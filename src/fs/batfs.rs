@@ -947,6 +947,15 @@ pub fn ns_stats() -> (usize, usize) {
 /// Create a new file with the given name and plaintext content.
 /// Content is encrypted with a per-file derived key.
 pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
+    // SP-B1.6.2 (2026-05-16): policy gate. BatFS uses AES-256-GCM-SIV
+    // which IS on the CNSA 2.0 allowlist — so this gate is a for-the-
+    // record assertion under gov-strict (always succeeds) but creates
+    // a structural failure point if someone ever swaps BatFS to a
+    // non-allowlisted AEAD primitive. Community build unaffected.
+    crate::crypto::policy::ensure_permitted(
+        crate::crypto::policy::Algo::Aes256GcmSiv,
+    )?;
+
     if data.len() > MAX_FILE_SIZE {
         return Err("file too large");
     }
