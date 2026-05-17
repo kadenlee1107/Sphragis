@@ -184,7 +184,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| DOC-001 | P0 | ❌ MISSING | No operator runbook |
+| DOC-001 | P0 | ⚠️ PARTIAL | `docs/OPERATOR_RUNBOOK.md` STARTER published (SP-DOC-001). 12 sections covering what exists today: build-profile choice, hardware-target selection, first-boot ceremony, lock-screen ops, TPI ceremony (setup + per-op flow + failure modes), audit-log ops, attestation ops, gov-strict deployment checklist (11 items), day-2 ops, incident response (4 scenarios), quick-reference card. 8 chapters deferred to SP-DOC-001.FULL once dependent SPs land (update workflow, multi-user, window manager, settings app, HSM endorsement refresh, WORM, hardware attestation, FedRAMP deployment guide). |
 | DOC-002 | P0 | ✅ HAVE | `docs/THREAT_MODEL.md` published (SP-DOC-002). 8 sections: assets (CSP/data/policy), 8 adversary capabilities (A1-A8), 10 attack surfaces (S1-S10) mapped to source-code regions, mitigations matrix (S×A), 7 residual risks with bounded scope + closure plans, 16-layer defense-in-depth summary. Consolidates the per-subsystem DESIGN_*.md threat-model fragments into AO-reviewable form. |
 | DOC-003 | P0 | ⚠️ PARTIAL | DESIGN docs exist (developer-facing); no AO-audience-formatted architecture doc |
 | DOC-004 | P0 | ❌ MISSING | No capability statement |
