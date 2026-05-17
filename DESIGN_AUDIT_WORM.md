@@ -1,4 +1,4 @@
-# DESIGN: WORM Audit Export to BatFS
+# DESIGN: WORM Audit Export to SealFS
 
 **Document version:** 1.0 (SP-AUD-002, 2026-05-16)
 **Status:** Design lock; implementation is SP-AUD-002.IMPL.
@@ -10,10 +10,10 @@
 Sphragis already has:
 - In-RAM audit ring (RING_CAP = 1024 entries) — `src/security/audit.rs`
 - HMAC-chained tamper-evident chain — `src/security/audit_chain.rs`
-- Text-format flush to BatFS `/audit.log` — `audit::flush_to_batfs`
+- Text-format flush to SealFS `/audit.log` — `audit::flush_to_sealfs`
 - Offline verifier (structural mode) — `tools/audit-verifier/`
 
-What's MISSING is a **Write-Once-Read-Many** export tier. The audit `flush_to_batfs` today writes idempotently: each call overwrites the prior `/audit.log`. That works for "save the latest ring snapshot" but it means an attacker who can write the BatFS can erase historical evidence by triggering a flush after-the-fact.
+What's MISSING is a **Write-Once-Read-Many** export tier. The audit `flush_to_sealfs` today writes idempotently: each call overwrites the prior `/audit.log`. That works for "save the latest ring snapshot" but it means an attacker who can write the SealFS can erase historical evidence by triggering a flush after-the-fact.
 
 WORM closes that loop: append-only journal segments + cryptographic hash chain across segments + external operator-side anchor of the latest segment-head. A tamperer cannot rewrite a sealed segment without breaking the chain, and they cannot truncate the journal without breaking the external anchor.
 
@@ -22,7 +22,7 @@ Audit finding history: this was tracked as **FS-H7** in the 2026-05-15 audit; de
 ## The shape
 
 ```
-BatFS layout for the WORM journal:
+SealFS layout for the WORM journal:
 
   /audit/worm/
     segment-0000000001.bin   (256 KiB max, sealed once full)
@@ -94,7 +94,7 @@ When the operator restores the device or audits later, they:
 
 /// Append a single record to the current WORM segment.
 /// Called from `record(cat, msg)` after the in-RAM ring write.
-/// Returns Err if BatFS is full or sealing is in-progress.
+/// Returns Err if SealFS is full or sealing is in-progress.
 pub fn worm_append(entry: &Entry) -> Result<(), &'static str>;
 
 /// Force-seal the current segment (e.g., before cave teardown, before
@@ -120,7 +120,7 @@ The HMAC key is the existing `AUDIT_HMAC_KEY` from `src/security/audit_chain.rs`
 
 - **Tail-only appends** are O(1); editing a single file with millions of records gets expensive
 - **Sealed segments are immutable** — easier to mirror off-device (rsync the sealed segments, exclude the current)
-- **Rotation** — operator can rotate old sealed segments to cold storage; only the current segment + recent ones live in BatFS
+- **Rotation** — operator can rotate old sealed segments to cold storage; only the current segment + recent ones live in SealFS
 - **Failure isolation** — a corrupt segment N doesn't invalidate segments 1..N-1 (they're already sealed + chain-anchored)
 
 ## Threat-model coverage

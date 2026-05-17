@@ -177,7 +177,7 @@ const FauxPage = () => (
     }}>What's inside</div>
     <ul style={{ margin: 0, padding: "0 0 0 20px", color: appColors.ink, listStyle: "square" }}>
       <li>Cave isolation — sealed containers with cap-set enforcement</li>
-      <li>BatFS encrypted vault with merkle integrity</li>
+      <li>SealFS encrypted vault with merkle integrity</li>
       <li>TLS 1.3 stack with cert pinning · <span style={{ color: appColors.cyan }}>read more</span></li>
       <li>Hand-written shell with audit trail · <span style={{ color: appColors.cyan }}>read more</span></li>
     </ul>

@@ -11,10 +11,10 @@ topic: crypto
 
 | Primitive             | Used for                                         | Where                       |
 | --------------------- | ------------------------------------------------ | --------------------------- |
-| **ChaCha20-Poly1305** | BatFS block AEAD; audit ring AEAD                | [[_generated/src/batfs]], [[_generated/src/security/audit]] |
+| **ChaCha20-Poly1305** | SealFS block AEAD; audit ring AEAD                | [[_generated/src/sealfs]], [[_generated/src/security/audit]] |
 | **AES-GCM**           | TLS 1.3 record-layer encryption                  | [[_generated/src/net/tls.rs]]    |
 | **Argon2id**          | passphrase → master key derivation               | [[_generated/src/auth]]    |
-| **SHA-256 / SHA-384** | TLS transcript hash, BatFS Merkle nodes          | [[_generated/src/net/tls.rs]], [[_generated/src/batfs]] |
+| **SHA-256 / SHA-384** | TLS transcript hash, SealFS Merkle nodes          | [[_generated/src/net/tls.rs]], [[_generated/src/sealfs]] |
 | **HMAC**              | TLS HKDF construction                            | [[_generated/src/net/tls.rs]]    |
 | **X25519**            | TLS classical key agreement                      | [[_generated/src/net/tls.rs]], [[_generated/src/net/tls_hybrid.rs]] |
 | **ML-KEM-768**        | TLS post-quantum key agreement (hybrid w/ X25519)| [[_generated/src/net/tls_hybrid.rs]] |
@@ -25,11 +25,11 @@ topic: crypto
 
 ## Choices worth understanding
 
-### Why ChaCha20-Poly1305 for BatFS, not AES-GCM
+### Why ChaCha20-Poly1305 for SealFS, not AES-GCM
 
 Chosen because:
 1. ChaCha20 is constant-time on every aarch64 implementation we ship; AES-GCM is constant-time only with hardware AES instructions, and we don't want to fork the security guarantee on whether the M4 advertises AES.
-2. ChaCha20 has no nonce-misuse-resistance footgun the way AES-GCM does at high traffic volumes — for BatFS where blocks are independent, this matters.
+2. ChaCha20 has no nonce-misuse-resistance footgun the way AES-GCM does at high traffic volumes — for SealFS where blocks are independent, this matters.
 3. The RustCrypto `chacha20poly1305` crate is small and audited.
 
 ### Why Argon2id at 8 MiB / 3 passes
@@ -76,5 +76,5 @@ Every primitive in this stack has been read end-to-end at least once. New crates
 ## Related
 
 - [[Concepts/TLS Hardening Journey]] — the timeline of this stack getting hardened
-- [[Concepts/Audit Ring Contract]] — same AEAD as BatFS, by design
+- [[Concepts/Audit Ring Contract]] — same AEAD as SealFS, by design
 - [[_generated/DESIGN_CRYPTO.md]] — design doc for the full stack

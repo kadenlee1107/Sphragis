@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Sphragis — BatFS: Custom Encrypted Filesystem
+// Sphragis — SealFS: Custom Encrypted Filesystem
 //
 // DESIGN_CRYPTO.md #2: per-file **ChaCha20-Poly1305 AEAD**. Replaces
 // the prior AES-256-CTR + HMAC-SHA256 encrypt-then-MAC construction
@@ -12,7 +12,7 @@
 
 use crate::crypto::sha256;
 use crate::kernel::mm::frame;
-// AUDIT-FS-C4 elite-tier (2026-05-16): migrate BatFS from
+// AUDIT-FS-C4 elite-tier (2026-05-16): migrate SealFS from
 // ChaCha20-Poly1305 to AES-256-GCM-SIV. Same 32-byte key, same
 // 12-byte nonce, same 16-byte tag — drop-in API replacement.
 // GCM-SIV is misuse-resistant: if a nonce IS reused (operator
@@ -135,7 +135,7 @@ static NONCE_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 // FL-027 / NEW-CRYPTO-007 fix: per-boot random 4-byte prefix mixed into
 // every CTR nonce. Without this, re-encrypting the same filename across
 // boots gave the same (key, IV) — a crib-drag on recurring files. The
-// persistent-across-reboot path ( Phase 7 / `batfs_disk.rs`)
+// persistent-across-reboot path ( Phase 7 / `sealfs_disk.rs`)
 // stores the per-file `nonce` in the inode on disk, so recurring files
 // keep their original nonce across reboots; the BOOT_NONCE_PREFIX only
 // affects NEW files created after mount, where it still guarantees no
@@ -201,7 +201,7 @@ pub fn verify_file_integrity(idx: usize) -> bool {
     }
 }
 
-/// HMAC-SHA256 of the Merkle root, keyed by the BatFS master key.
+/// HMAC-SHA256 of the Merkle root, keyed by the SealFS master key.
 /// Updated by `seal_merkle_root()` on every create/delete (the same
 /// points that call `rebuild_merkle`). Used by `verify_all_integrity`
 /// as the externally-anchored expected value against which the
@@ -313,31 +313,31 @@ pub fn init(master_key: &[u8; 32]) {
         }
     }
 
-    // try to mount/format the on-disk BatFS. Outside the
+    // try to mount/format the on-disk SealFS. Outside the
     // critical_section above because virtio-blk uses MMIO + DMA + IRQ
     // and shouldn't run with IRQs masked the whole time.
     init_disk(master_key);
 }
 
-/// mount the on-disk BatFS layout, or format it
+/// mount the on-disk SealFS layout, or format it
 /// fresh if the disk is blank / a different layout. Restores the inode
 /// table + per-file ciphertext into `FILES[]` and RAM pages.
 fn init_disk(master_key: &[u8; 32]) {
     use crate::drivers::uart;
-    use super::batfs_disk;
+    use super::sealfs_disk;
 
     if !crate::drivers::virtio::blk::is_ready() {
-        uart::puts("  [fs] no virtio-blk attached — BatFS is RAM-only this boot\n");
+        uart::puts("  [fs] no virtio-blk attached — SealFS is RAM-only this boot\n");
         return;
     }
 
-    match batfs_disk::mount_or_format(master_key) {
+    match sealfs_disk::mount_or_format(master_key) {
         Ok(true) => {
-            uart::puts("  [fs] disk was blank — formatted fresh BatFS layout\n");
+            uart::puts("  [fs] disk was blank — formatted fresh SealFS layout\n");
             return;
         }
         Ok(false) => {
-            uart::puts("  [fs] mounted existing BatFS from disk\n");
+            uart::puts("  [fs] mounted existing SealFS from disk\n");
         }
         Err(e) => {
             uart::puts("  [fs] disk mount failed: ");
@@ -350,8 +350,8 @@ fn init_disk(master_key: &[u8; 32]) {
     // Disk mounted. Read the inode table; for each Active inode,
     // allocate contiguous RAM pages, copy the ciphertext from disk,
     // populate FILES[i].
-    let mut inodes = [batfs_disk::DiskInode::empty(); batfs_disk::DISK_MAX_FILES];
-    if let Err(e) = batfs_disk::read_all_inodes(&mut inodes) {
+    let mut inodes = [sealfs_disk::DiskInode::empty(); sealfs_disk::DISK_MAX_FILES];
+    if let Err(e) = sealfs_disk::read_all_inodes(&mut inodes) {
         uart::puts("  [fs] inode read failed: ");
         uart::puts(e);
         uart::puts(" — RAM-only fallback\n");
@@ -364,7 +364,7 @@ fn init_disk(master_key: &[u8; 32]) {
     unsafe {
         for i in 0..MAX_FILES {
             let inode = &inodes[i];
-            if inode.state != batfs_disk::DiskInode::STATE_ACTIVE { continue; }
+            if inode.state != sealfs_disk::DiskInode::STATE_ACTIVE { continue; }
             let size = inode.size as usize;
             if size == 0 || size > MAX_FILE_SIZE { continue; }
 
@@ -383,7 +383,7 @@ fn init_disk(master_key: &[u8; 32]) {
             // Pull ciphertext from disk into the freshly-allocated pages.
             let dest_slice = core::slice::from_raw_parts_mut(
                 data_addr as *mut u8, pages * BLOCK_SIZE);
-            if batfs_disk::read_data(i, dest_slice, size).is_err() {
+            if sealfs_disk::read_data(i, dest_slice, size).is_err() {
                 uart::puts("  [fs] disk data read failed mid-restore\n");
                 continue;
             }
@@ -487,6 +487,12 @@ fn compute_file_mac(name: &str, nonce: &[u8; 12], ciphertext: &[u8]) -> [u8; 32]
     crate::security::zeroize::zeroize(&mut key);
 
     // Inner hash: SHA-256(i_pad || "batfs-integrity-v1" || name || nonce || ciphertext)
+    // Historical HMAC domain-separator from the Bat_OS naming era.
+    // Preserve the exact byte string: changing it would silently
+    // invalidate the integrity MAC of every existing file on every
+    // pre-rename SealFS image. The Rust identifier names + UI
+    // strings now say SealFS; only this HMAC context literal is
+    // frozen for backwards compat.
     let mut inner = sha256::Sha256::new();
     inner.update(&i_pad);
     inner.update(b"batfs-integrity-v1");
@@ -635,7 +641,7 @@ pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
 
 /// Look up the taint bitmap for `full_name` (already mount-prefix
 /// composed). Returns 0 for unknown files — fail-open at lookup
-/// time matches BatFS's "no entry = no policy" shape used by
+/// time matches SealFS's "no entry = no policy" shape used by
 /// labels and object types.
 pub fn file_taint(full_name: &str) -> u32 {
     // AUDIT-FS-C1 (2026-05-15): the prior F3 spinlock + RAII guard
@@ -907,7 +913,7 @@ pub fn ns_delete(name: &str) -> Result<(), &'static str> {
 /// only files whose on-disk name begins with the cave's prefix,
 /// and the prefix is stripped before invoking the callback —
 /// the cave never learns the on-disk naming scheme. From kernel/
-/// admin context (no active cave), the entire BatFS namespace is
+/// admin context (no active cave), the entire SealFS namespace is
 /// visible (same as the un-prefixed `list`).
 pub fn ns_list<F: FnMut(&str, usize, bool)>(mut callback: F) {
     let mut prefix_buf = [0u8; 80];
@@ -947,10 +953,10 @@ pub fn ns_stats() -> (usize, usize) {
 /// Create a new file with the given name and plaintext content.
 /// Content is encrypted with a per-file derived key.
 pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
-    // SP-B1.6.2 (2026-05-16): policy gate. BatFS uses AES-256-GCM-SIV
+    // SP-B1.6.2 (2026-05-16): policy gate. SealFS uses AES-256-GCM-SIV
     // which IS on the CNSA 2.0 allowlist — so this gate is a for-the-
     // record assertion under gov-strict (always succeeds) but creates
-    // a structural failure point if someone ever swaps BatFS to a
+    // a structural failure point if someone ever swaps SealFS to a
     // non-allowlisted AEAD primitive. Community build unaffected.
     crate::crypto::policy::ensure_permitted(
         crate::crypto::policy::Algo::Aes256GcmSiv,
@@ -970,7 +976,7 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
     // FILE_COUNT bump can interleave with a concurrent delete and
     // resurrect the UAF/double-free race the prior fix closed.
     // Note: holds across disk I/O for write_data/write_inode/flush —
-    // batfs_disk uses MMIO-poll completion (no IRQ wait), so this is
+    // sealfs_disk uses MMIO-poll completion (no IRQ wait), so this is
     // safe on single-CPU. SMP retrofit needs a real SpinLock.
     let _g = crate::kernel::sync::IrqGuard::new();
     unsafe {
@@ -1081,7 +1087,7 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         entry.sensitivity = sens_byte;
         entry.integrity   = integ_byte;
         // Object-type defaults to "untyped" (0). Operators retag
-        // via the future `batfs::ns_create_typed` API + the
+        // via the future `sealfs::ns_create_typed` API + the
         // `te-obj-tag` shell command.
         entry.obj_type = 0;
 
@@ -1097,14 +1103,14 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         //
         // Inside the unsafe block so we can read FILES[slot] directly
         // and so `slot` is still in scope.
-        if super::batfs_disk::is_mounted() {
+        if super::sealfs_disk::is_mounted() {
             let entry_ro = &FILES[slot];
             let cipher_slice = core::slice::from_raw_parts(
                 entry_ro.data_addr as *const u8, entry_ro.size);
-            let _ = super::batfs_disk::write_data(slot, cipher_slice);
+            let _ = super::sealfs_disk::write_data(slot, cipher_slice);
 
-            let mut inode = super::batfs_disk::DiskInode::empty();
-            inode.state = super::batfs_disk::DiskInode::STATE_ACTIVE;
+            let mut inode = super::sealfs_disk::DiskInode::empty();
+            inode.state = super::sealfs_disk::DiskInode::STATE_ACTIVE;
             inode.encrypted = if entry_ro.encrypted { 1 } else { 0 };
             inode.name_len = entry_ro.name_len as u32;
             let nl = entry_ro.name_len.min(64);
@@ -1112,8 +1118,8 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
             inode.size = entry_ro.size as u64;
             inode.nonce = entry_ro.nonce;
             inode.tag.copy_from_slice(&entry_ro.hash[..16]);
-            let _ = super::batfs_disk::write_inode(slot, &inode);
-            let _ = super::batfs_disk::flush();
+            let _ = super::sealfs_disk::write_inode(slot, &inode);
+            let _ = super::sealfs_disk::flush();
         }
     }
 
@@ -1124,7 +1130,7 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
     // SP-AUD-003 emit-site (2026-05-16): record file-mutation events.
     // Skip the audit-internal paths (audit/worm/*, audit.log,
     // audit-binary.log) to avoid recursion via audit_worm::worm_append
-    // → batfs::create → audit::record → audit_worm::worm_append.
+    // → sealfs::create → audit::record → audit_worm::worm_append.
     if !name.starts_with("audit/") && name != "audit.log" && name != "audit-binary.log" {
         let mut msg = [0u8; 192];
         let prefix = b"FileAccess: create ";
@@ -1240,10 +1246,10 @@ pub fn delete(name: &str) -> Result<(), &'static str> {
     // inode on disk. Order: data sectors first (so a crash mid-delete
     // leaves the inode pointing at zeroed ciphertext, which AEAD will
     // reject anyway), inode commit second.
-    if super::batfs_disk::is_mounted() {
-        let _ = super::batfs_disk::zero_data(slot);
-        let _ = super::batfs_disk::free_inode(slot);
-        let _ = super::batfs_disk::flush();
+    if super::sealfs_disk::is_mounted() {
+        let _ = super::sealfs_disk::zero_data(slot);
+        let _ = super::sealfs_disk::free_inode(slot);
+        let _ = super::sealfs_disk::flush();
     }
 
     // Update Merkle tree
@@ -1272,7 +1278,7 @@ pub fn list<F: FnMut(&str, usize, bool)>(mut callback: F) {
     // AUDIT-FS-C1: list iterates Active entries; a concurrent delete
     // can swap state mid-walk. Hold IrqGuard. Note: callback runs
     // inside the critical section — callbacks must NOT yield, do
-    // network I/O, or call back into batfs.
+    // network I/O, or call back into sealfs.
     let _g = crate::kernel::sync::IrqGuard::new();
     unsafe {
         for i in 0..MAX_FILES {
@@ -1315,7 +1321,7 @@ pub fn file_size(name: &str) -> Option<usize> {
 // /
 /// # Safety
 /// May only be called from the panic handler (via wipe::emergency_wipe).
-/// After this runs BatFS read/write WILL fail; the kernel is halting.
+/// After this runs SealFS read/write WILL fail; the kernel is halting.
 pub unsafe fn panic_wipe() {
     let key_ptr = core::ptr::addr_of_mut!(MASTER_KEY) as *mut u8;
     for i in 0..32 {
@@ -1325,7 +1331,7 @@ pub unsafe fn panic_wipe() {
 
 /// AUDIT-FS-C2 (2026-05-15): controlled master-key wipe for the
 /// operator-triggered wipe path. `wipe::destroy_keys()` previously
-/// called `batfs::init(&zero_key)` twice expecting the second call
+/// called `sealfs::init(&zero_key)` twice expecting the second call
 /// to overwrite the master key. But `init` returns early when
 /// `INITIALIZED == true`, so the real master key was never zeroed
 /// and the "Encryption keys destroyed" line was a lie.

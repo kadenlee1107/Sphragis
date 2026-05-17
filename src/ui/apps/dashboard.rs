@@ -119,7 +119,7 @@ fn draw_security_kvs(p: &W::PanelInner) {
     let _ = net_ok; // referenced if we expand the rows later
 
     // doc-drift fix. Was "AES-256-CTR / 16 ROUNDS pre-
-    // Argon2id" — but BatFS now uses ChaCha20-Poly1305 AEAD (V8-CRYPTO)
+    // Argon2id" — but SealFS now uses ChaCha20-Poly1305 AEAD (V8-CRYPTO)
     // and the KDF is real Argon2id .
     draw_kv_row(p.x, y,            label_w, "ENCRYPT",  "CHACHA20-POLY1305",               State::Neutral, false); y += KV_ROW_H;
     draw_kv_row(p.x, y,            label_w, "HASH",     "SHA-256",                         State::Neutral, false); y += KV_ROW_H;
@@ -143,7 +143,7 @@ fn draw_architecture(p: &W::PanelInner) {
     y += 18;
     font::draw_str(fb, w, p.x, y, "Bare-metal AArch64 microkernel . zero external deps", MID, BG);
     y += 18;
-    font::draw_str(fb, w, p.x, y, "Cave isolation . BatFS encrypted . audit-everything", MID, BG);
+    font::draw_str(fb, w, p.x, y, "Cave isolation . SealFS encrypted . audit-everything", MID, BG);
     y += 18;
     font::draw_str(fb, w, p.x, y, "Built 20260502.a3f1c . signed", DIM_TXT, BG);
     y += 18;

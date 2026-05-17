@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Headless smoke for `taint-selftest` — information-flow taint
-propagation on BatFS reads/writes."""
+propagation on SealFS reads/writes."""
 from __future__ import annotations
 
 import sys, time

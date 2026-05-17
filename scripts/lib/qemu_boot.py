@@ -69,10 +69,10 @@ def _refresh_sphragis_bin(elf: Path, bin_path: Path) -> None:
                    check=True)
 
 
-def _ensure_batfs_disk() -> Path:
-    """STUMP #136: ensure the persistent BatFS disk image exists.
+def _ensure_sealfs_disk() -> Path:
+    """STUMP #136: ensure the persistent SealFS disk image exists.
 
-    Layout (must match `src/fs/batfs_disk.rs` constants):
+    Layout (must match `src/fs/sealfs_disk.rs` constants):
       - 1   sector  superblock
       - 64  sectors inode table  (128 entries × 256 B each)
       - 16384 sectors data       (128 slots × 128 sectors each = 8 MB)
@@ -81,12 +81,12 @@ def _ensure_batfs_disk() -> Path:
     We round up to a clean 64 MB so there's headroom for v2 layouts
     (free bitmap, journal sector, etc.) without re-formatting.
 
-    Wipe with `rm state/batfs.img` to start fresh; the next boot will
+    Wipe with `rm state/sealfs.img` to start fresh; the next boot will
     see a blank disk and the kernel will format it before mounting.
     """
     state_dir = ROOT / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
-    img = state_dir / "batfs.img"
+    img = state_dir / "sealfs.img"
     target_bytes = 64 * 1024 * 1024
     if not img.exists() or img.stat().st_size != target_bytes:
         # truncate-style sparse file. macOS + Linux both honour seek+write
@@ -166,12 +166,12 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
     )
     _wait_for_daemon()
 
-    # STUMP #136 (Phase 7): persistent BatFS disk image. Auto-created
+    # STUMP #136 (Phase 7): persistent SealFS disk image. Auto-created
     # on first run with a fixed 64 MB raw image. All cave manifests +
-    # user files + audit etc that BatFS persists end up in here, and
+    # user files + audit etc that SealFS persists end up in here, and
     # survive across QEMU invocations because the file outlives the
-    # guest. Wipe with `rm state/batfs.img` to start fresh.
-    batfs_img = _ensure_batfs_disk()
+    # guest. Wipe with `rm state/sealfs.img` to start fresh.
+    sealfs_img = _ensure_sealfs_disk()
 
     args = [
         "qemu-system-aarch64",
@@ -193,9 +193,9 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
         # `tcp-listen 8080` shell command + `nc` smoke test can land.
         "-netdev", "user,id=net0,hostfwd=tcp::8080-:8080",
         "-device", "virtio-net-device,netdev=net0",
-        # STUMP #136: virtio-blk for persistent BatFS.
-        "-drive", f"file={batfs_img},if=none,format=raw,id=batfs0",
-        "-device", "virtio-blk-device,drive=batfs0",
+        # STUMP #136: virtio-blk for persistent SealFS.
+        "-drive", f"file={sealfs_img},if=none,format=raw,id=sealfs0",
+        "-device", "virtio-blk-device,drive=sealfs0",
     ]
 
     fp = open(log_path, "wb")

@@ -64,7 +64,7 @@ Sphragis (the name) shall be trademarked in the US (USPTO) by the project's corp
 ## 3. Crypto (CRY) — CNSA 2.0 alignment + FIPS 140-3 readiness
 
 ### REQ-CRY-001 (P0) — ML-KEM-1024 (FIPS 203) as default key establishment
-All kernel-mediated key-establishment paths (TLS, attestation, IPC sealing, BatFS key wrap) shall use ML-KEM-1024 by default. Hybrid (ML-KEM + X25519) is acceptable for transition; pure-classical is forbidden in the `sphragis-gov` build. Configure parameter set explicitly in the `ml-kem` crate invocation.
+All kernel-mediated key-establishment paths (TLS, attestation, IPC sealing, SealFS key wrap) shall use ML-KEM-1024 by default. Hybrid (ML-KEM + X25519) is acceptable for transition; pure-classical is forbidden in the `sphragis-gov` build. Configure parameter set explicitly in the `ml-kem` crate invocation.
 
 ### REQ-CRY-002 (P0) — ML-DSA-87 (FIPS 204) as default signature
 All kernel-mediated signature paths (X.509 verify, code signing, attestation quote signing) shall accept ML-DSA-87 by default. RSA / ECDSA shall be accepted ONLY as legacy-verification for `sphragis-community`; the `sphragis-gov` build shall reject them at the policy layer.
@@ -73,7 +73,7 @@ All kernel-mediated signature paths (X.509 verify, code signing, attestation quo
 The kernel image, loadable modules, and update artifacts shall be signable with LMS or XMSS stateful-hash signatures. Add a new `crypto/lms.rs` or `crypto/xmss.rs` module (or vetted crate). This closes the CNSA 2.0 software-firmware-signing requirement.
 
 ### REQ-CRY-004 (P0) — AES-256 only (no AES-128) in gov build
-All bulk encryption shall use AES-256 (GCM, GCM-SIV, XTS, CTR variants). AES-128 shall be rejected at the policy layer in `sphragis-gov`. Sphragis already uses AES-256 in BatFS (GCM-SIV) and TLS; this requirement formalizes the policy.
+All bulk encryption shall use AES-256 (GCM, GCM-SIV, XTS, CTR variants). AES-128 shall be rejected at the policy layer in `sphragis-gov`. Sphragis already uses AES-256 in SealFS (GCM-SIV) and TLS; this requirement formalizes the policy.
 
 ### REQ-CRY-005 (P0) — SHA-384 preferred; SHA-256 deprecated in gov build
 All hash uses shall default to SHA-384 (or SHA-512 where API requires it). SHA-256 shall be accepted ONLY for legacy compat (e.g., X.509 verify of older intermediates) and shall be deprecated for new-issuance per CNSA 2.0. Add `crypto/sha512.rs` if not present.
@@ -162,8 +162,8 @@ On Confidential VM platforms (AMD SEV-SNP, Intel TDX, ARM CCA), the kernel shall
 ### REQ-AUD-001 (P0) — HMAC-keyed chained audit log (already done)
 HMAC-SHA384 (upgrade from current SHA-256 to align with CNSA 2.0) chained audit log with RNDR-seeded kernel-only HMAC key. Existing implementation closes audit Cave-M1/M2/M3 (week 3-4). REQ adds: upgrade hash to SHA-384.
 
-### REQ-AUD-002 (P0) — WORM audit export to BatFS
-Audit ring shall periodically export to a WORM-sealed BatFS volume. Audit Phase-2 FS-H7 (deferred from week 3-4) — reopen and close. Pairs with REQ-CRT-004 below.
+### REQ-AUD-002 (P0) — WORM audit export to SealFS
+Audit ring shall periodically export to a WORM-sealed SealFS volume. Audit Phase-2 FS-H7 (deferred from week 3-4) — reopen and close. Pairs with REQ-CRT-004 below.
 
 ### REQ-AUD-003 (P0) — Audit categories cover NIAP GPOSPP FAU_GEN.1
 Audit categories shall include at minimum: Authentication, Privilege Escalation, File Access (configurable), Kernel Module Load, Cave Create/Destroy, Crypto Key Use, Network Connect, Update Apply. Maps to NIAP `FAU_GEN.1`.
@@ -219,7 +219,7 @@ Prove the analogous non-interference property for AF_UNIX, pipes, and shm: bytes
 Prove: no cave can preempt another in violation of its priority class; no cave can monopolize CPU beyond its quota; no kernel critical section exceeds its bounded-time budget.
 
 ### REQ-VER-004 (P1) — Memory-safety regression tests via Kani
-Use Kani to model-check critical pointer arithmetic in `caves/linux/mmu.rs`, `kernel/mm/frame.rs`, and BatFS path resolution. Catch the class of bugs that drove audit findings BatCave-F9 (symlink TOCTOU).
+Use Kani to model-check critical pointer arithmetic in `caves/linux/mmu.rs`, `kernel/mm/frame.rs`, and SealFS path resolution. Catch the class of bugs that drove audit findings BatCave-F9 (symlink TOCTOU).
 
 ### REQ-VER-005 (P0) — Verified subsystem boundary documented
 The 5-10K LoC of "verified subsystem" shall be physically isolated in a single Cargo crate/module with documented inputs and outputs. This is the artifact we point to when claiming "verified IFC on critical subsystems."

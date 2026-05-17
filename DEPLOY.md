@@ -227,7 +227,7 @@ Sphragis desktop
 - See `QUICKSTART.md`. `make render-live` boots Sphragis under
   QEMU/HVF on the Mac with virtio-gpu, virtio-keyboard,
   virtio-tablet, and (since STUMP #136) virtio-blk for persistent
-  BatFS. Way faster iteration than M4 chainload while developing.
+  SealFS. Way faster iteration than M4 chainload while developing.
 
 ## Security notes
 
@@ -235,7 +235,7 @@ Sphragis desktop
   — in a "production" deployment you'd want to either disable m1n1
   USB or physically airgap the M4. Today: development-mode only.
 - The auth gate runs BEFORE any persistent data is decrypted (the
-  passphrase derives the BatFS master key).
+  passphrase derives the SealFS master key).
 - Failure modes:
   1. Wrong passphrase 5 times → all keys destroyed (`security/auth.rs`
      MAX_ATTEMPTS).
@@ -244,5 +244,5 @@ Sphragis desktop
 - Secure Enclave integration (the docs claim "master keys never touch
   RAM") is **not yet implemented** — `drivers/apple/sep.rs` doesn't
   exist. Master key currently lives in `static mut MASTER_KEY` per
-  `src/fs/batfs.rs`. SEP work is a future STUMP. Don't trust the
+  `src/fs/sealfs.rs`. SEP work is a future STUMP. Don't trust the
   "government-grade" framing literally until SEP lands.

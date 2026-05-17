@@ -91,13 +91,13 @@ const KEY_DIR_LEN: usize = KEY_DIR_C2S.len();
 const _: () = assert!(KEY_DIR_C2S.len() == KEY_DIR_S2C.len(),
     "KEY_DIR_C2S and KEY_DIR_S2C must have equal length");
 
-/// BatFS path for our persistent per-cave Ed25519 identity. 32-byte
+/// SealFS path for our persistent per-cave Ed25519 identity. 32-byte
 /// raw seed. Persisting it across boots is what makes server-side
 /// allowlists meaningful — without persistence, each session's
 /// "identity" would be ephemeral and the server couldn't pin us.
 const IDENTITY_PATH: &str = "comms_identity.key";
 
-/// Lazy-loaded session identity. Generated + persisted to BatFS on
+/// Lazy-loaded session identity. Generated + persisted to SealFS on
 /// first call; reused for subsequent sessions in the same cave.
 /// On cave switch the cached value is cleared via
 /// `reset_for_cave_switch` so the new tenant doesn't inherit the
@@ -106,7 +106,7 @@ static mut MY_IDENTITY_PK: [u8; 32] = [0; 32];
 static mut MY_IDENTITY_SK: [u8; 64] = [0; 64];
 static mut MY_IDENTITY_LOADED: bool = false;
 
-/// Return our persistent identity, lazy-loading from BatFS (or
+/// Return our persistent identity, lazy-loading from SealFS (or
 /// generating + persisting on first use). Returns the secret-key
 /// blob (64 bytes per ed25519-compact layout) and the public key.
 fn my_identity() -> Result<(SecretKey, [u8; 32]), &'static str> {
@@ -119,20 +119,20 @@ fn my_identity() -> Result<(SecretKey, [u8; 32]), &'static str> {
             return Ok((sk, pk));
         }
 
-        // Try to load from BatFS first.
+        // Try to load from SealFS first.
         // gap-audit 032: ns_* — each cave gets its own comms identity
         // (sys-wg's identity ≠ desktop's identity, even though the
         // file name is the same in the cave's view).
         let mut seed = [0u8; 32];
-        let kp = match crate::fs::batfs::ns_read(IDENTITY_PATH, &mut seed) {
+        let kp = match crate::fs::sealfs::ns_read(IDENTITY_PATH, &mut seed) {
             Ok(32) => KeyPair::from_seed(Seed::new(seed)),
             _ => {
                 // Generate + persist. Seed from RNDR (with fallback
                 // inside rng::fill_bytes), then write the raw seed
-                // to BatFS for future loads.
+                // to SealFS for future loads.
                 crate::crypto::rng::fill_bytes(&mut seed);
                 let kp = KeyPair::from_seed(Seed::new(seed));
-                let _ = crate::fs::batfs::ns_create(IDENTITY_PATH, &seed);
+                let _ = crate::fs::sealfs::ns_create(IDENTITY_PATH, &seed);
                 kp
             }
         };
@@ -686,7 +686,7 @@ pub fn reset_for_cave_switch() {
         PINNED_SERVER_ID = [0; 32];
         PIN_SET = false;
         // Wipe the cached identity — the new cave will lazy-load
-        // its own from BatFS (or generate one) on first comms use.
+        // its own from SealFS (or generate one) on first comms use.
         // Without this, the new cave would inherit the prior tenant's
         // identity, defeating cave isolation for comms.
         MY_IDENTITY_PK = [0; 32];

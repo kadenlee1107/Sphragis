@@ -38,7 +38,7 @@ def main() -> int:
         c.expect(rb"sphragis > ", timeout=90); time.sleep(0.5)
         c.sendline("biba-selftest")
         idx = c.expect([
-            rb"\xe2\x9c\x93 Biba lattice: BatFS no-read-down \+ IPC no-write-up / no-read-down verified",
+            rb"\xe2\x9c\x93 Biba lattice: SealFS no-read-down \+ IPC no-write-up / no-read-down verified",
             rb"\xe2\x9c\x97 FAIL: \S+",
         ], timeout=30)
         if idx == 1:
@@ -47,7 +47,7 @@ def main() -> int:
             print("[biba] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[biba] log: {LOG}", file=sys.stderr); return 1
         c.expect(rb"sphragis > ", timeout=10)
-        print("[biba] PASS — Biba dual lattice + BatFS + IPC enforcement verified")
+        print("[biba] PASS — Biba dual lattice + SealFS + IPC enforcement verified")
         print(f"[biba] log: {LOG}"); return 0
     except pexpect.TIMEOUT:
         print("[biba] FAIL — timeout", file=sys.stderr)

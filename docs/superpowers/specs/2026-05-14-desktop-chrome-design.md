@@ -48,7 +48,7 @@ A 22-px-tall strip across the top of the screen. Background is the panel color w
 **Left:** the wordmark "SPHRAGIS" (uppercase, letterspaced). Clicking it summons the app launcher overlay.
 
 **Right (customizable status strip):** A user-configurable list of status badges, ending in two fixed glyphs:
-- `⋯` — opens the config sheet to add / remove / reorder badges. Preference persists per-user in BatFS.
+- `⋯` — opens the config sheet to add / remove / reorder badges. Preference persists per-user in SealFS.
 - `⏻` — locks the system (drops back to the Wave 1 lock screen). Same effect as `⌘L`.
 
 **Default badge set (ships out of the box, in this order):**
@@ -160,7 +160,7 @@ Sketch only. The plan decomposes this into bite-sized tasks.
 
 2. **Desktop rewrite (`src/ui/desktop.rs`).** New `paint_desktop` that paints in z-order: canvas BG → watermark Σ → launcher grid (opacity per state) → all windows (back to front) → top bar (on top of everything). `desktop::run()` event loop dispatches keyboard / pointer events to the WM or the top-bar / launcher per the state machine.
 
-3. **Top bar (`src/ui/topbar.rs` — new file).** A small focused module: `paint_topbar(fb, w, badges)` and `handle_click(x, y)`. The badge list lives in WM state and is loaded from BatFS on `desktop::init()`.
+3. **Top bar (`src/ui/topbar.rs` — new file).** A small focused module: `paint_topbar(fb, w, badges)` and `handle_click(x, y)`. The badge list lives in WM state and is loaded from SealFS on `desktop::init()`.
 
 4. **App-icon plumbing.** Each app gets registered with a name, a 22×22 icon (currently the placeholder rounded square — a TODO comment marks where the real icon goes during Wave 3), and an `open()` callback returning a `Window`.
 
@@ -168,7 +168,7 @@ Sketch only. The plan decomposes this into bite-sized tasks.
 
 6. **Cave-name plumbing.** The WM's `Window` struct gets an `Option<&'static str> cave_name`. When an app is launched from inside a cave context (caves manager → open shell in cave), the launcher fills this in; the chrome renders `TITLE · cave_name`.
 
-7. **Customization.** A small config sheet (a modal overlay rendered by the top bar) lists every available badge with a toggle and a drag handle. Saves to BatFS at `/system/desktop/topbar.cfg`.
+7. **Customization.** A small config sheet (a modal overlay rendered by the top bar) lists every available badge with a toggle and a drag handle. Saves to SealFS at `/system/desktop/topbar.cfg`.
 
 8. **Verification.** Boot under QEMU, walk all four states, open ≥ 3 windows, drag / resize / close, lock + unlock + confirm the workspace persists, toggle badges in the config sheet.
 

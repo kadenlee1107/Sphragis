@@ -7,13 +7,13 @@ runs `mount-ns-selftest` at the shell, and asserts the cross-cave
 file isolation property:
 
   - Two caves can create the same logical filename without
-    collision (`batfs::ns_create` prepends the active cave's
+    collision (`sealfs::ns_create` prepends the active cave's
     mount prefix).
-  - Each cave's `batfs::ns_read` returns its own content; the
+  - Each cave's `sealfs::ns_read` returns its own content; the
     other cave's view is invisible.
-  - `batfs::ns_list` from inside a cave never leaks the on-disk
+  - `sealfs::ns_list` from inside a cave never leaks the on-disk
     prefix (no `<cave>:` in any visible name).
-  - The un-prefixed `batfs::list` (kernel/admin context) sees
+  - The un-prefixed `sealfs::list` (kernel/admin context) sees
     BOTH on-disk entries.
 
 Pass: exit 0. Fail: exit non-zero with serial log path.

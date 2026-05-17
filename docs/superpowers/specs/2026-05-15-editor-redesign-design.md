@@ -2,7 +2,7 @@
 
 Replace the legacy 826-line cyberpunk EDITOR (`src/ui/apps/editor.rs`)
 with a calm Wave-4-register single-buffer editor that opens files
-from FILES, edits them in place, and saves back to BatFS. Bundle a
+from FILES, edits them in place, and saves back to SealFS. Bundle a
 trivial commit deleting the orphaned 1327-line `src/ui/truetype.rs`
 (`#![allow(dead_code)]`, zero call sites, dead since the no-browser
 pivot).
@@ -24,8 +24,8 @@ In:
   strip button) on a selected file in FILES loads its bytes into
   EDITOR and switches the active app
 - Save flow: [S]ave overwrites the file via
-  `batfs::ns_delete + batfs::ns_create`
-- Revert flow: [R]evert reloads from BatFS; ConfirmModal protects
+  `sealfs::ns_delete + sealfs::ns_create`
+- Revert flow: [R]evert reloads from SealFS; ConfirmModal protects
   this if the buffer is dirty
 - Esc flow: if dirty, ConfirmModal "Discard unsaved changes?";
   commit (or no-dirty case) switches active app back to FILES
@@ -157,14 +157,14 @@ The open path is one helper:
 
 ```rust
 fn open_selected_in_editor() -> AppEvent {
-    let (count, _) = batfs::ns_stats();
+    let (count, _) = sealfs::ns_stats();
     if count == 0 { return AppEvent::Consumed; }
 
     let mut name_buf = [0u8; NAME_MAX];
     let mut name_len = 0;
     let sel = selected_file();
     let mut row_index: usize = 0;
-    batfs::ns_list(|n, _, _| {
+    sealfs::ns_list(|n, _, _| {
         if row_index == sel {
             let l = n.len().min(NAME_MAX);
             name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -191,7 +191,7 @@ below.
 ```rust
 if let Some(name_bytes) = take_pending_file() {
     let name = unsafe { core::str::from_utf8_unchecked(name_bytes) };
-    load_from_batfs(name);
+    load_from_sealfs(name);
 }
 ```
 
@@ -242,8 +242,8 @@ if they save, but at least it's visible).
 | `Backspace` | Delete char before cursor (or join with prev line if at col 0); set DIRTY |
 | `Enter` | Split line at cursor; cursor moves to start of new line; set DIRTY |
 | `Tab` | Insert 4 spaces (matches Wave 1 EDITOR behavior) |
-| `S` (no modifier) | Save — overwrite via `batfs::ns_delete` + `batfs::ns_create` |
-| `R` (no modifier) | Revert — ConfirmModal if dirty; reload from BatFS |
+| `S` (no modifier) | Save — overwrite via `sealfs::ns_delete` + `sealfs::ns_create` |
+| `R` (no modifier) | Revert — ConfirmModal if dirty; reload from SealFS |
 | `Esc` | If dirty, ConfirmModal; else switch active app to FILES |
 
 The unmodified `S` / `R` / `Esc` capture is the action-strip hotkey
@@ -264,7 +264,7 @@ gaps"). The implementation plan's pre-flight resolves these.
 2. **`apps_registry::AppId::Files` / `AppId::Editor`** — these
    enum variants exist (Wave 4 confirmed). Just confirm import path.
 
-3. **`batfs::ns_delete + batfs::ns_create` overwrite pattern** —
+3. **`sealfs::ns_delete + sealfs::ns_create` overwrite pattern** —
    shell.rs `write` command uses this. Confirm the exact API
    (signatures verified in Wave 4: `ns_delete(&str) -> Result<(),
    &'static str>`, `ns_create(&str, &[u8]) -> Result<(), &'static
@@ -285,7 +285,7 @@ gaps"). The implementation plan's pre-flight resolves these.
 - **Load fails** (file doesn't exist or read error): empty buffer
   + status strip shows "load failed: <reason>" in MID. User can
   press Esc back to FILES and try a different file.
-- **Save fails** (BatFS full, locked, key missing): status strip
+- **Save fails** (SealFS full, locked, key missing): status strip
   shows "save failed: <reason>" in MID; dirty flag stays set so
   the user knows the buffer hasn't reached disk.
 - **Buffer overflow** (typing past 256 cols on a line): silently

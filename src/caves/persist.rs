@@ -5,12 +5,12 @@
 // DESIGN_CAVES.md line 87: "Persistent (default): survives reboots,
 // tools stay installed". Until this module landed, that line was a lie:
 // CAVES[] was a static-mut RAM array with no save/load wiring, so every
-// reboot started with an empty cave table. Persistent caves' BatFS data
+// reboot started with an empty cave table. Persistent caves' SealFS data
 // survived (per-cave fs_key is deterministic from boot_master_key + name)
 // but the OS no longer remembered the caves existed.
 //
 // This module makes the spec real. Each Persistent cave gets a manifest
-// file in BatFS named "__cave__<name>". The manifest captures everything
+// file in SealFS named "__cave__<name>". The manifest captures everything
 // needed to rebuild the in-RAM CAVES[] entry on next boot — name, type,
 // caps, tools, and (for docker-backed caves) image reference.
 //
@@ -29,8 +29,8 @@
 // cave::destroy() → delete()
 // cave::init() → restore_all() (re-populate CAVES[])
 //
-// The manifest is encrypted by BatFS itself (ChaCha20-Poly1305 AEAD,
-// keyed off the boot master_key + filename). It's just a regular BatFS
+// The manifest is encrypted by SealFS itself (ChaCha20-Poly1305 AEAD,
+// keyed off the boot master_key + filename). It's just a regular SealFS
 // file; the persistence layer doesn't add any crypto of its own.
 
 use crate::caves::cave::{
@@ -38,7 +38,7 @@ use crate::caves::cave::{
     MAX_NAME, MAX_CAPS, MAX_CAP_NAME, MAX_TOOLS, MAX_TOOL_NAME, MAX_IMAGE,
     CAVES, MAX_CAVES,
 };
-use crate::fs::batfs;
+use crate::fs::sealfs;
 use crate::crypto::sha256;
 
 // ─── Manifest format (v1) ──────────────────────────────────────────────
@@ -89,7 +89,7 @@ const _: () = {
 // ─── Filename helper ───────────────────────────────────────────────────
 
 /// Build "__cave__<name>" into `out`. Returns the number of bytes
-/// written. Caller guarantees `out` is at least 64 bytes (BatFS
+/// written. Caller guarantees `out` is at least 64 bytes (SealFS
 /// MAX_FILENAME).
 fn manifest_name(cave_name: &str, out: &mut [u8]) -> usize {
     let pre = MANIFEST_PREFIX.as_bytes();
@@ -209,7 +209,7 @@ fn deserialize(buf: &[u8; MANIFEST_SIZE], cave: &mut Cave) -> Result<(), &'stati
     // and the cave name (same formula `cave::create` uses). It was never
     // serialized to disk in plaintext.
     cave.fs_key = sha256::derive_key(
-        &batfs::master_key(),
+        &sealfs::master_key(),
         &cave.name[..cave.name_len],
     );
 
@@ -218,7 +218,7 @@ fn deserialize(buf: &[u8; MANIFEST_SIZE], cave: &mut Cave) -> Result<(), &'stati
 
 // ─── Public API ────────────────────────────────────────────────────────
 
-/// Save a cave's manifest to BatFS. Idempotent — overwrites if a stale
+/// Save a cave's manifest to SealFS. Idempotent — overwrites if a stale
 /// manifest is already present. No-op for Ephemeral or Free caves.
 pub fn save(cave: &Cave) {
     if cave.cave_type == CaveType::Ephemeral { return; }
@@ -231,38 +231,38 @@ pub fn save(cave: &Cave) {
     let mut data = [0u8; MANIFEST_SIZE];
     serialize(cave, &mut data);
 
-    // BatFS::create errors on duplicate name. Delete-then-create is the
+    // SealFS::create errors on duplicate name. Delete-then-create is the
     // simple "upsert". Both calls are silent on error (we can't recover
-    // from BatFS being uninitialized this far in, and an audit entry is
+    // from SealFS being uninitialized this far in, and an audit entry is
     // already produced by callers like grant_cap/destroy).
-    let _ = batfs::delete(path);
-    let _ = batfs::create(path, &data);
+    let _ = sealfs::delete(path);
+    let _ = sealfs::create(path, &data);
 }
 
-/// Remove a cave's manifest from BatFS. Idempotent — silent if no
+/// Remove a cave's manifest from SealFS. Idempotent — silent if no
 /// manifest exists. Called on `seal` (cave is no longer Persistent) and
 /// `destroy` (cave is gone).
 pub fn delete(name: &str) {
     let mut nb = [0u8; 64];
     let nlen = manifest_name(name, &mut nb);
     let path = unsafe { core::str::from_utf8_unchecked(&nb[..nlen]) };
-    let _ = batfs::delete(path);
+    let _ = sealfs::delete(path);
 }
 
-/// Scan BatFS for "__cave__*" manifests, deserialize each, and install
+/// Scan SealFS for "__cave__*" manifests, deserialize each, and install
 /// it into a free CAVES[] slot. Returns the number of caves restored.
 // /
-/// Called once during `cave::init()` after `batfs::init()` has unlocked
+/// Called once during `cave::init()` after `sealfs::init()` has unlocked
 /// the filesystem with the operator's passphrase.
 pub fn restore_all() -> usize {
     // First pass — collect the manifest filenames into a fixed buffer.
     // We can't deserialize during the `list` callback because that would
-    // need to mutate CAVES while batfs holds its internal locks.
+    // need to mutate CAVES while sealfs holds its internal locks.
     let mut names = [[0u8; 64]; MAX_CAVES];
     let mut name_lens = [0usize; MAX_CAVES];
     let mut name_count = 0usize;
 
-    batfs::list(|name, _size, _enc| {
+    sealfs::list(|name, _size, _enc| {
         if !name.starts_with(MANIFEST_PREFIX) { return; }
         if name_count >= MAX_CAVES { return; }
         let nb = name.as_bytes();
@@ -283,7 +283,7 @@ pub fn restore_all() -> usize {
         // Zero the read buffer in case the file is shorter than expected
         // (deserialize would otherwise read trailing stack noise).
         for b in buf.iter_mut() { *b = 0; }
-        match batfs::read(path, &mut buf) {
+        match sealfs::read(path, &mut buf) {
             Ok(_n) => {
                 unsafe {
                     let slot = (0..MAX_CAVES)
@@ -303,7 +303,7 @@ pub fn restore_all() -> usize {
     // the cave registry was restored from disk this boot.
     if restored > 0 {
         let mut buf = [0u8; 64];
-        let pre = b"caves restored from BatFS: ";
+        let pre = b"caves restored from SealFS: ";
         let mut p = 0usize;
         let n = pre.len().min(buf.len());
         buf[..n].copy_from_slice(&pre[..n]);

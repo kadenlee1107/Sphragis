@@ -10,7 +10,7 @@
 //! - **In-memory store of revoked serials** keyed by issuer SPKI
 //!   SHA-256. 256 issuers × 1024 serials each = ~32 KB. Plenty for
 //!   our trust posture (6 root anchors + their intermediates).
-//! - **Boot-time load from BatFS.** Operator drops `/crls/<anchor>.crl`
+//! - **Boot-time load from SealFS.** Operator drops `/crls/<anchor>.crl`
 //!   for each trust anchor; we parse each on first auth. CRL refresh
 //!   on a cadence is a separate, follow-up feature.
 //! - **No CRL fetching** in this module. The CRL Distribution Points

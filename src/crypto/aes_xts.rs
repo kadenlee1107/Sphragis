@@ -7,19 +7,19 @@
 //! re-encrypt the whole file.
 //!
 //! Why we need it on top of the AES-GCM and ChaCha20-Poly1305 AEADs
-//! BatFS already uses:
+//! SealFS already uses:
 //!
 //! - GCM/Poly1305 are NOT appropriate for random-access blocks. A
 //!   block-level decrypt would have to re-MAC the whole file's chunk
 //!   range, which is wasteful and exposes timing patterns.
 //! - XTS gives us length-preserving encryption per sector — needed
 //!   when the eventual NVMe driver lands and we want native FDE-class
-//!   semantics under BatFS's file layer.
+//!   semantics under SealFS's file layer.
 //!
 //! Limitations of XTS (documented for the future): it does NOT
 //! authenticate, only confidentiality. Pair with a separate integrity
 //! mechanism (Merkle tree per extent, or dm-verity-class signed root)
-//! for full assurance. For BatFS today, file-level Poly1305 sits on
+//! for full assurance. For SealFS today, file-level Poly1305 sits on
 //! top — XTS would slot in beneath as the block cipher when we move
 //! off the GCM-per-file design.
 

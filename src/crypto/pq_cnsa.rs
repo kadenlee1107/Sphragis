@@ -2,7 +2,7 @@
 //!
 //! This module exposes **ML-KEM-1024** (FIPS 203) and **ML-DSA-87**
 //! (FIPS 204) as standalone CNSA-2.0-compliant KEM and signature
-//! services for non-TLS contexts: BatFS at-rest key wrap, audit-ring
+//! services for non-TLS contexts: SealFS at-rest key wrap, audit-ring
 //! seal, attestation quote signing, cave-mediated IPC sealing.
 //!
 //! ## Why a separate module from `pq_hybrid.rs` / `pq_hybrid_sig.rs`?
@@ -19,7 +19,7 @@
 //! no IETF-standardized TLS hybrid codepoint for ML-KEM-1024 yet, so
 //! the existing TLS path stays on 768/65 for interop reality. Every
 //! Sphragis surface that ISN'T constrained by TLS-peer interop —
-//! BatFS, audit, IPC, attestation — routes through this module
+//! SealFS, audit, IPC, attestation — routes through this module
 //! instead, automatically clearing the CNSA 2.0 bar.
 //!
 //! See `ANTI_FEATURES.md` §ANTI-005 (no weak crypto in gov build) and

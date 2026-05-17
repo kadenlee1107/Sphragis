@@ -91,12 +91,12 @@ linked_list_allocator = { version = "0.10", default-features = false, features =
 # on GPUs/ASICs. Argon2id forces attackers to burn memory per guess.
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 # DESIGN_CRYPTO.md priority #4 + daemon audit pairing: ChaCha20-Poly1305
-# AEAD for BatFS file encryption. Replaces AES-256-CTR + HMAC-SHA256
+# AEAD for SealFS file encryption. Replaces AES-256-CTR + HMAC-SHA256
 # (encrypt-then-MAC) with a single AEAD primitive: one pass,
 # constant-time by design, no timing side channels on the key.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 # AUDIT-FS-C4 elite-tier (2026-05-16): misuse-resistant AEAD for
-# BatFS at-rest encryption. AES-GCM-SIV defends against nonce reuse
+# SealFS at-rest encryption. AES-GCM-SIV defends against nonce reuse
 # in a way plain AES-GCM and ChaCha20-Poly1305 do not — if a nonce
 # IS reused (operator bug, RAM corruption flipping the stored
 # prefix, etc.), authenticity holds and only the two reused-nonce
@@ -130,7 +130,7 @@ blake3 = { version = "1.5", default-features = false, features = ["pure"] }
 # output, different IV constants); we need both. RustCrypto's `blake2`
 # crate is the canonical implementation.
 blake2 = { version = "0.10", default-features = false }
-# AES-XTS for block-level disk/sector encryption (BatFS extents and the
+# AES-XTS for block-level disk/sector encryption (SealFS extents and the
 # eventual NVMe block layer). XTS is the standard for full-disk crypto;
 # GCM is not appropriate for random-access blocks.
 xts-mode = { version = "0.5", default-features = false }

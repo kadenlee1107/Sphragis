@@ -1,5 +1,5 @@
-#ifndef _BAT_FSTREAM
-#define _BAT_FSTREAM
+#ifndef _SEAL_FSTREAM
+#define _SEAL_FSTREAM
 #include <iosfwd>
 #include <ostream>
 namespace std {

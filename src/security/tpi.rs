@@ -4,7 +4,7 @@
 //! Certain operations should never be authorised by a single
 //! operator alone — wiping the audit ring, rotating master keys,
 //! installing a new release pubkey, declassifying labeled data,
-//! flushing the audit chain seal to BatFS. SELinux + RBAC alone
+//! flushing the audit chain seal to SealFS. SELinux + RBAC alone
 //! can't stop a sole compromised operator; TPI forces M-of-N
 //! co-signatures before the kernel honours the op.
 //!
@@ -49,13 +49,13 @@ use crate::security::audit::{self, Category};
 pub enum OpId {
     /// Wipe the audit ring (`audit-flush --truncate`, future).
     AuditRingWipe       = 1,
-    /// Rotate the BatFS master key (future).
+    /// Rotate the SealFS master key (future).
     MasterKeyRotate     = 2,
     /// Install a new release pubkey baked into the kernel image.
     ReleasePubkeyRotate = 3,
     /// Declassify a TS file to a lower label (future).
     DeclassifyDowngrade = 4,
-    /// Capture + persist the audit chain seal to BatFS.
+    /// Capture + persist the audit chain seal to SealFS.
     AuditSealFlush      = 5,
 }
 

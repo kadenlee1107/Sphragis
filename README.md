@@ -33,9 +33,9 @@ Sphragis is opinionated about one thing in particular: **no ambient authority**.
 - **Boots on real Apple M4 hardware** via [m1n1 chainload](https://github.com/AsahiLinux/m1n1). ADT discovery, DWC3 USB-3 bring-up, ATC PHY tunables, dockchannel UART — all confirmed on real silicon. The Asahi Linux installer doesn't yet support M4 (M4/M5 RE is in progress in the Asahi community as of 2026); Sphragis got there via an independent RE pipeline, with the boot evidence linked above.
 - **Boots in QEMU virt** for development. `cargo build --release --target aarch64-unknown-none --features gicv3` produces a kernel that runs end-to-end on `qemu-system-aarch64 -machine virt -cpu max`. Every selftest below runs headlessly under QEMU.
 - **Per-cave MMU isolation.** Workloads run inside "caves" — each with its own L1 page table, mount namespace, IPC mailbox, memory quota, and security labels. Cave boundaries enforce TLB invalidation; cave-private state never crosses.
-- **Encrypted filesystem (BatFS).** Per-file AEAD (ChaCha20-Poly1305), per-cave keys derived from Argon2id over a passphrase, mount-namespace prefix per cave so two caves can't see each other's filenames.
+- **Encrypted filesystem (SealFS).** Per-file AEAD (ChaCha20-Poly1305), per-cave keys derived from Argon2id over a passphrase, mount-namespace prefix per cave so two caves can't see each other's filenames.
 - **Multi-level security.** Bell-LaPadula sensitivity lattice (no read-up) and Biba dual lattice integrity (no read-down). MLS labels are bound into AEAD AAD — tampering with a file's classification invalidates decryption.
-- **SELinux-style Type Enforcement.** Subject domains (one per cave), object types (per BatFS file), per-(domain, type, op) deny matrix, plus exec-time domain auto-transition (`domain_auto_trans`) gated by an explicit allow-list.
+- **SELinux-style Type Enforcement.** Subject domains (one per cave), object types (per SealFS file), per-(domain, type, op) deny matrix, plus exec-time domain auto-transition (`domain_auto_trans`) gated by an explicit allow-list.
 - **Two-person integrity (TPI).** Ed25519 M-of-2 quorum on every destructive privileged op (`audit-wipe`, `audit-seal`, `mls-declassify`, master-key rotation). Replay-resistant, TTL-bounded, role-separated, one-shot consumed.
 - **Tamper-evident audit log.** Hash chain over the audit ring detects modification of any entry — the offset of the first mismatch tells the operator how far back the tampering reaches. Off-platform seal protocol extends detection past one ring rollover.
 - **Hardened heap.** Per-allocation front + back canary frames keyed by a boot-random secret (SHA-256(KEY || addr || size)). Detects buffer overflow, underflow, and double-free at deallocation. POISON pattern stamped on freed blocks for double-free detection across reallocation.
@@ -72,7 +72,7 @@ python3 scripts/qemu_exec_trans_selftest.py
 # ...etc — see scripts/qemu_*_selftest.py
 ```
 
-On boot the kernel asks for a passphrase (used to derive the BatFS master key). Press return to use the dev passphrase `sphragis-dev` (hardcoded for QEMU smoke tests via the `SPHRAGIS_DEV_PASSPHRASE` build-time env). Production builds read the passphrase from UART.
+On boot the kernel asks for a passphrase (used to derive the SealFS master key). Press return to use the dev passphrase `sphragis-dev` (hardcoded for QEMU smoke tests via the `SPHRAGIS_DEV_PASSPHRASE` build-time env). Production builds read the passphrase from UART.
 
 In the interactive shell:
 
@@ -108,7 +108,7 @@ src/
   caves/      The "cave" isolation primitive — unit of policy enforcement
   crypto/       ChaCha20-Poly1305, Ed25519, SHA-256, Argon2id, X25519
   drivers/      virtio (QEMU) and apple/ (M4-specific HW bring-up)
-  fs/           BatFS encrypted filesystem
+  fs/           SealFS encrypted filesystem
   kernel/       Process, scheduler, IPC, pipes, shm, time, mm, heap-guard
   net/          TCP, UDP, TLS, WireGuard, NAT, conntrack
   security/     Audit ring + chain + seal, TPI quorum, OTP, auth, CVE audit

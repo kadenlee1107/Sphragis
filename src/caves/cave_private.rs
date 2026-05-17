@@ -79,7 +79,7 @@ pub fn ensure_page(cave_id: u16) -> Option<usize> {
     // gap-audit 030 expansion: charge the cave's memory quota
     // BEFORE the cave_pool allocation. Cave-private is the only
     // remaining cave-attributable allocator that wasn't quota-
-    // metered (shm / pipe / batfs already charge). Quota 0 means
+    // metered (shm / pipe / sealfs already charge). Quota 0 means
     // unlimited, so default-quota caves are unaffected. On any
     // downstream failure below we release back.
     if cave::charge_pages_for(cave_id, 1).is_err() {

@@ -2,7 +2,7 @@
 """Sphragis offline attestation-Quote verifier (SP-ATT-001).
 
 Reads a binary Quote dump produced by `attest-dump` shell command
-(written to BatFS as `attest-quote.bin`) and:
+(written to SealFS as `attest-quote.bin`) and:
 
   1. Parses the SP-ATT-001 wire format ("SPHATTV1" magic).
   2. Structurally validates fields (lengths match expected

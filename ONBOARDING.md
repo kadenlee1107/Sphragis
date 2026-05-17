@@ -32,7 +32,7 @@ src/
   caves/       Process isolation primitive — per-cave L1 page tables, mount namespace, IPC mailbox, MLS labels.
   crypto/      RustCrypto primitives + post-quantum hybrid KEM/sig (ML-KEM-768, ML-DSA-65, Argon2id).
   drivers/     virtio (net, gpu, keyboard, tablet), UART, framebuffer.
-  fs/          BatFS encrypted filesystem (XChaCha20-Poly1305).
+  fs/          SealFS encrypted filesystem (XChaCha20-Poly1305).
   kernel/      Scheduler, MMU init, memory management, IPC.
   net/         TLS 1.3 + hybrid X25519MLKEM768, X.509 chain validation, kernel-mediated HTTPS.
   security/    Auth gate (boot_screen), wipe (deadman + duress + lockout), audit ring with off-platform seal.

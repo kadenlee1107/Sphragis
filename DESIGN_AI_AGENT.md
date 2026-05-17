@@ -259,7 +259,7 @@ Layered, in order of effectiveness:
 
 - **No data leaves the LAN.** Cave policy enforces this in the kernel. The agent's connection is the only egress; if its policy is removed, the agent stops working.
 - **Inference host is operator-controlled.** Owned hardware, owned software stack. ollama logs can be configured off if the operator doesn't want even local logging.
-- **Audit ring entries are sealed.** Same AEAD as BatFS. Master-key-derived. An attacker who pwns the agent runtime cannot read past audit entries.
+- **Audit ring entries are sealed.** Same AEAD as SealFS. Master-key-derived. An attacker who pwns the agent runtime cannot read past audit entries.
 - **No training data leakage.** The fine-tune happens on operator-controlled hardware. Training data never leaves. The base model (downloaded from Hugging Face) is read-only and verified by hash.
 - **Tool calls audited per-call.** Every `read_file`, `grep_source`, etc. invocation lands an audit entry. The agent can't read files the operator didn't grant; can't write anything; can't reach networks beyond the inference host.
 

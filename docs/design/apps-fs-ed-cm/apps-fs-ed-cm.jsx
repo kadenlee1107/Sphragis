@@ -266,7 +266,7 @@ const EDPane = () => {
     [['p', '    '], ['i', 'kernel'], ['p', '::'], ['i', 'arch'], ['p', '::'], ['i', 'init_exceptions'], ['p', '();']],
     [],
     [['p', '    '], ['c', '// storage + net come up after the core is alive']],
-    [['p', '    '], ['i', 'fs'], ['p', '::'], ['i', 'batfs'], ['p', '::'], ['i', 'init'], ['p', '(&'], ['i', 'master_key'], ['p', ');']],
+    [['p', '    '], ['i', 'fs'], ['p', '::'], ['i', 'sealfs'], ['p', '::'], ['i', 'init'], ['p', '(&'], ['i', 'master_key'], ['p', ');']],
     [['p', '    '], ['i', 'drivers'], ['p', '::'], ['i', 'virtio'], ['p', '::'], ['i', 'net'], ['p', '::'], ['i', 'init'], ['p', '();']],
     [['p', '    '], ['i', 'net'], ['p', '::'], ['i', 'init'], ['p', '();']],
     [],

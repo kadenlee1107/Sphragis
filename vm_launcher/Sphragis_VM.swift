@@ -71,7 +71,7 @@ let networkDevice = VZVirtioNetworkDeviceConfiguration()
 networkDevice.attachment = VZNATNetworkDeviceAttachment()
 config.networkDevices = [networkDevice]
 
-// Storage — 1GB virtual disk for BatFS
+// Storage — 1GB virtual disk for SealFS
 let diskURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("sphragis_disk.img")
 if !FileManager.default.fileExists(atPath: diskURL.path) {
     // Create a 1GB disk image

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Serve a Sphragis BPKG bundle over TCP so the guest can stage it.
 
-BatFS on QEMU is RAM-only — there's no host-shared volume for the
+SealFS on QEMU is RAM-only — there's no host-shared volume for the
 guest to read bundles from. This daemon listens on a TCP port and,
 on each connection, sends a 4-byte big-endian length prefix followed
 by the bundle bytes, then disconnects. The guest's `pkg-stage` shell
-command does the matching read + writes the result into BatFS.
+command does the matching read + writes the result into SealFS.
 
 Usage:
     python3 scripts/pkg_serve.py <bundle.bpkg> [port]
@@ -14,7 +14,7 @@ Usage:
         # from 10.0.2.2 through to host loopback)
 
 From Sphragis:
-    pkg-stage <name-on-batfs> 10.0.2.2:9102
+    pkg-stage <name-on-sealfs> 10.0.2.2:9102
 """
 from __future__ import annotations
 

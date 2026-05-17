@@ -29,7 +29,7 @@ Per `docs/FIPS_140_3_MODULE_BOUNDARY.md` §7.8 in full detail. Summary:
 | CSP | Sensitivity | Compromise impact |
 |---|---|---|
 | Operator-CA private key | Critical | Full break of attestation chain; attacker can sign quotes for any cave |
-| BatFS master key | Critical | Full break of at-rest encryption for affected cave's files |
+| SealFS master key | Critical | Full break of at-rest encryption for affected cave's files |
 | Per-cave file keys | High | Break of one cave's at-rest data |
 | ML-KEM-1024 decapsulation keys | High | Decrypt of any KEM-encapsulated payload to that key |
 | ML-DSA-87 signing keys | High | Forge signatures under that key |
@@ -51,7 +51,7 @@ Per `docs/FIPS_140_3_MODULE_BOUNDARY.md` §7.8 in full detail. Summary:
 
 - **Cave-policy rules** — must be unforgeable by caves; enforced by kernel-mediated cave_policy::check at every cross-cave operation
 - **Type-enforcement deny matrix** — same property
-- **Bell-LaPadula sensitivity + Biba integrity labels** — must be tamper-evident; bound into AEAD AAD for BatFS files (audit-week-3-4 closure)
+- **Bell-LaPadula sensitivity + Biba integrity labels** — must be tamper-evident; bound into AEAD AAD for SealFS files (audit-week-3-4 closure)
 
 ---
 
@@ -77,7 +77,7 @@ Listed from least to most powerful. Sphragis defends against all of them to vary
 ### A3: Local console attacker
 
 - Physical access to the device at a non-running state (powered off)
-- Can read raw storage media (BatFS encrypted blocks)
+- Can read raw storage media (SealFS encrypted blocks)
 - Cannot extract RAM contents (no cold-boot attack assumed within scope — though `panic_wipe` mitigates partial RAM exposure)
 - Cannot extract secrets from a powered-down SEP / TPM / Caliptra
 
@@ -133,10 +133,10 @@ Mapped to source-code regions for traceability.
 - **WireGuard responder**: `src/net/wireguard.rs` (988 LoC). Noise IK pattern, sliding-window replay protection (audit week N), cave-private state (no peer leak between caves).
 - **NAT + ICMP + conntrack**: `src/net/{nat,arp,ip}.rs`. Per-cave shaper (`src/net/cave_shaper.rs`) prevents one cave from DoS-ing the network.
 
-### S3: Filesystem (BatFS)
+### S3: Filesystem (SealFS)
 
 - **At-rest AEAD**: AES-256-GCM-SIV (audit-week-8 elite-tier closure; misuse-resistant against nonce reuse)
-- **Per-cave file keys** derived via HKDF-SHA-384 from BatFS master + per-file nonce
+- **Per-cave file keys** derived via HKDF-SHA-384 from SealFS master + per-file nonce
 - **Mount namespace per cave** — two caves cannot see each other's filenames
 - **AAD bound to security label** — tampering with a file's classification invalidates decryption
 - **Merkle root sealed** under HMAC (audit-week-3-4 FS-H7)
@@ -215,11 +215,11 @@ Rows = adversary capabilities A1-A8. Columns = attack surfaces S1-S10. Cells = m
 | A7 Quantum | Hybrid PQ key-exchange shields the symmetric session keys against store-now-decrypt-later |
 | A8 Insider | Operator-CA validation + audit trail |
 
-### S3 BatFS
+### S3 SealFS
 
 | | Mitigation |
 |---|---|
-| A1 Network | N/A — BatFS is local storage |
+| A1 Network | N/A — SealFS is local storage |
 | A2 Cave | Per-cave mount namespace; per-cave file keys; AAD-bound classification labels; no cave can see another's filenames |
 | A3 Powered-off console | AES-256-GCM-SIV at rest; master key derived from operator passphrase via Argon2id (memory-hard); attacker must brute-force passphrase + GPU-resistant cost |
 | A4-A5 | as elsewhere |

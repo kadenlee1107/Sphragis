@@ -82,7 +82,7 @@ const LockScreen = ({ state = "idle", width = 1280, height = 800 }) => {
   // Boot log lines (last 4)
   const bootLog = [
     { tag: "ok", text: "[net] virtio-net up  10.0.0.42/24" },
-    { tag: "ok", text: "[fs]  batfs mounted /  ro  aes-xts-512" },
+    { tag: "ok", text: "[fs]  sealfs mounted /  ro  aes-xts-512" },
     { tag: "ok", text: "[sec] tpm seal verified  pcr0..7 match" },
     { tag: "ok", text: "[ui]  framebuffer 1280x800 bgra8" },
   ];

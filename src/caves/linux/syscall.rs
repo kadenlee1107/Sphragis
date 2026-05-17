@@ -5626,7 +5626,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
             }
             "df" => {
                 write_str("Filesystem     1K-blocks  Used Available Use% Mounted on\n");
-                write_str("batfs             262144 32768    229376  13% /\n");
+                write_str("sealfs             262144 32768    229376  13% /\n");
                 true
             }
             "tty" => { write_str("/dev/console\n"); true }
@@ -6809,9 +6809,9 @@ pub fn proc_read(path: &str, buf: &mut [u8]) -> usize {
             b"Sphragis version 0.3.0 (bat@caves) (aarch64-bat-none) #1 SMP PREEMPT\n",
         "/proc/uptime" => b"3600.00 3500.00\n",
         "/proc/loadavg" => b"0.01 0.05 0.10 1/32 42\n",
-        "/proc/filesystems" => b"nodev\tbatfs\nnodev\tproc\nnodev\ttmpfs\n",
+        "/proc/filesystems" => b"nodev\tsealfs\nnodev\tproc\nnodev\ttmpfs\n",
         "/proc/mounts" | "/proc/self/mounts" =>
-            b"batfs / batfs rw 0 0\nproc /proc proc rw 0 0\ntmpfs /tmp tmpfs rw 0 0\n",
+            b"sealfs / sealfs rw 0 0\nproc /proc proc rw 0 0\ntmpfs /tmp tmpfs rw 0 0\n",
         _ => return 0,
     };
     let len = content.len().min(buf.len());

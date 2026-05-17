@@ -4,7 +4,7 @@
 // renderer's hot paths (every fetch, every click, every script run)
 // can call `record()` without touching disk. Operator dumps recent
 // entries via the `audit` shell command, or flushes the whole buffer
-// to BatFS as one encrypted blob with `audit-flush`.
+// to SealFS as one encrypted blob with `audit-flush`.
 //
 // Format per entry:
 // timestamp (u64 ticks from cntpct_el0)
@@ -63,7 +63,7 @@ pub enum Category {
     /// outcome, cert-pin mismatch, CRL/OCSP revocation hit,
     /// firewall decision. Previously logged ad-hoc as Fetch / Cave.
     Net         = 15,
-    /// AUDIT-CAVE-M2: filesystem events — BatFS mount / wipe /
+    /// AUDIT-CAVE-M2: filesystem events — SealFS mount / wipe /
     /// integrity-verify result. Previously squashed into Cave.
     Fs          = 16,
     /// AUDIT-CAVE-M2: key-rotation events. Logged whenever a
@@ -457,7 +457,7 @@ pub unsafe fn wipe_ring() {
 
 /// Serialize the whole resident ring (oldest-first) into `out` as
 /// newline-delimited records. Returns the number of bytes written.
-/// Used by `audit-flush` to push the buffer into BatFS as one file.
+/// Used by `audit-flush` to push the buffer into SealFS as one file.
 pub fn serialize(out: &mut [u8]) -> usize {
     let total = HEAD.load(Ordering::Relaxed);
     if total == 0 { return 0; }
@@ -485,7 +485,7 @@ pub fn serialize(out: &mut [u8]) -> usize {
     pos
 }
 
-/// flush the resident audit ring to BatFS as `/audit.log`.
+/// flush the resident audit ring to SealFS as `/audit.log`.
 // /
 /// Used by `cave::seal` and `cave::destroy` to lock the trail in
 /// place at security-sensitive transitions — without this, an
@@ -499,17 +499,17 @@ pub fn serialize(out: &mut [u8]) -> usize {
 // /
 /// Static 256K buffer to avoid stack-staging. Single-CPU + IrqGuard-
 /// scoped callers means no concurrent flush races.
-pub fn flush_to_batfs() -> Result<usize, &'static str> {
+pub fn flush_to_sealfs() -> Result<usize, &'static str> {
     static mut FLUSH_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
     unsafe {
         let buf = &mut *core::ptr::addr_of_mut!(FLUSH_BUF);
         let n = serialize(buf);
         if n == 0 { return Ok(0); }
-        // Idempotent overwrite: delete-then-create. BatFS::create
+        // Idempotent overwrite: delete-then-create. SealFS::create
         // errors on duplicate name; we want every flush to replace
         // the prior log (rotation policy is a future STUMP).
-        let _ = crate::fs::batfs::delete("audit.log");
-        crate::fs::batfs::create("audit.log", &buf[..n])?;
+        let _ = crate::fs::sealfs::delete("audit.log");
+        crate::fs::sealfs::create("audit.log", &buf[..n])?;
         Ok(n)
     }
 }
@@ -524,7 +524,7 @@ pub fn flush_to_batfs() -> Result<usize, &'static str> {
 // SP-AUD-004.1 adds a binary-format export that preserves the full
 // canonical-byte format the HMAC chain consumed. With this, the
 // verifier's cryptographic mode (--key-hex) can reproduce every
-// chain link against the BatFS-exported log.
+// chain link against the SealFS-exported log.
 //
 // Binary format:
 //   Header (40 bytes):
@@ -548,7 +548,7 @@ pub const BINARY_HEADER_LEN: usize = 24 + 8 + 8;
 /// Serialize the whole resident ring (oldest-first) into `out` as
 /// binary-format records preceded by the header. Returns the number
 /// of bytes written. Used by `audit-flush --binary` /
-/// `flush_to_batfs_binary`.
+/// `flush_to_sealfs_binary`.
 pub fn serialize_binary(out: &mut [u8]) -> usize {
     if out.len() < BINARY_HEADER_LEN {
         return 0;
@@ -587,25 +587,25 @@ pub fn serialize_binary(out: &mut [u8]) -> usize {
     pos
 }
 
-/// Flush the resident audit ring to BatFS as `/audit.bin` in the
-/// binary format. Companion to `flush_to_batfs` (text format);
+/// Flush the resident audit ring to SealFS as `/audit.bin` in the
+/// binary format. Companion to `flush_to_sealfs` (text format);
 /// operator runs both for redundant exports — text is human-readable,
 /// binary is verifier-precise.
-pub fn flush_to_batfs_binary() -> Result<usize, &'static str> {
+pub fn flush_to_sealfs_binary() -> Result<usize, &'static str> {
     static mut BIN_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
     unsafe {
         let buf = &mut *core::ptr::addr_of_mut!(BIN_BUF);
         let n = serialize_binary(buf);
         if n <= BINARY_HEADER_LEN { return Ok(0); }
-        let _ = crate::fs::batfs::delete("audit.bin");
-        crate::fs::batfs::create("audit.bin", &buf[..n])?;
+        let _ = crate::fs::sealfs::delete("audit.bin");
+        crate::fs::sealfs::create("audit.bin", &buf[..n])?;
         Ok(n)
     }
 }
 
 /// restore previously-persisted audit entries from a
 /// `serialize`-format buffer (typically the contents of `/audit.log`
-/// in BatFS, written by a prior boot's `audit-flush`).
+/// in SealFS, written by a prior boot's `audit-flush`).
 // /
 /// Re-populates the RING with the parsed entries so the operator's
 /// `audit` command shows historical events. Each restored event has

@@ -131,7 +131,7 @@ pub fn paint(body: WindowRect) {
                 body_lines: &[
                     "  kill all processes inside the cave",
                     "  zero the cave's encryption keys",
-                    "  wipe its BatFS subtree",
+                    "  wipe its SealFS subtree",
                     "  clear MLS labels + taint records",
                     "",
                     "IRREVERSIBLE.",

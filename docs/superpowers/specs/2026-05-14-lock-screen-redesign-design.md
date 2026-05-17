@@ -93,7 +93,7 @@ A centered three-element vertical stack. Nothing else on screen.
 
 This is a complete enumeration. The implementation plan should treat anything not listed above as something to remove.
 
-- No status pills (`ENCRYPTED`, `BATFS`, `M1N1`, `NET`).
+- No status pills (`ENCRYPTED`, `SEALFS`, `M1N1`, `NET`).
 - No system identity strip (`HOST … KERNEL … ARCH …`).
 - No hairline rules.
 - No version line (`V0.5.0-DEV · BUILD … · SIGNED`).

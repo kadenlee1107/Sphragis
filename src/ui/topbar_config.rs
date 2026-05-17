@@ -1,5 +1,5 @@
 //! Top-bar badge config: which badges to show, in what order.
-//! Persists to /system/desktop/topbar.cfg in BatFS as a one-line
+//! Persists to /system/desktop/topbar.cfg in SealFS as a one-line
 //! ASCII letter sequence ("NDC" = NET, DEADMAN, CLOCK).
 
 #![allow(dead_code)]
@@ -85,12 +85,12 @@ fn save() {
     let mut n = 0;
     for b in iter() { buf[n] = badge_letter(b); n += 1; }
     buf[n] = b'\n'; n += 1;
-    let _ = crate::fs::batfs::create(CONFIG_FILE, &buf[..n]);
+    let _ = crate::fs::sealfs::create(CONFIG_FILE, &buf[..n]);
 }
 
 pub fn load() {
     let mut buf = [0u8; MAX_BADGES + 1];
-    if let Ok(n) = crate::fs::batfs::read(CONFIG_FILE, &mut buf) {
+    if let Ok(n) = crate::fs::sealfs::read(CONFIG_FILE, &mut buf) {
         let mut new_badges: [Option<Badge>; MAX_BADGES] = [None; MAX_BADGES];
         let mut j = 0;
         for &c in &buf[..n] {

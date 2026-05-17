@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Headless argument-completion smoke for the Sphragis shell.
 
-Creates two BatFS files via `write`, then tests that:
+Creates two SealFS files via `write`, then tests that:
   1. `read fo<Tab>` completes uniquely to `read foobar` (only file
      starting with `fo`).
   2. `read <Tab>` lists both files (multi-match).
 
 This validates the past-space Tab path: `arg_kind_for("read", 0)`
-returns `ArgKind::File`, and `complete_argument` enumerates BatFS
+returns `ArgKind::File`, and `complete_argument` enumerates SealFS
 to find candidates.
 """
 from __future__ import annotations
@@ -127,14 +127,14 @@ def run() -> int:
         c.expect(rb"sphragis > ", timeout=10)
 
         # Test 6: subcommand-aware arg — `pkg install fo<Tab>` should
-        # complete from BatFS files (the (cmd, subcommand) lookup
+        # complete from SealFS files (the (cmd, subcommand) lookup
         # picks ArgKind::File at arg_index=1).
         c.send(b"pkg install fo")
         time.sleep(0.2)
         c.send(b"\t")
         c.expect(rb"foobar", timeout=10)
         c.expect(rb"foozap", timeout=10)
-        print("[argcomplete-smoke]   PASS subcmd-arg: 'pkg install fo' + Tab listed batfs files")
+        print("[argcomplete-smoke]   PASS subcmd-arg: 'pkg install fo' + Tab listed sealfs files")
         c.send(b"\x03")
         c.expect(rb"sphragis > ", timeout=10)
 

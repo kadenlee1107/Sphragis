@@ -13,7 +13,7 @@
 //! | Hashing for signatures | SHA-1, SHA-256 | SHA-384, SHA-512 |
 //! | Public-key signing | RSA, ECDSA | ML-DSA-87, LMS, XMSS |
 //! | Public-key key-exchange | RSA, classical ECDH-only | ML-KEM-1024 (or hybrid with X25519 for TLS interop) |
-//! | AEAD outside CNSA | plain ChaCha20-Poly1305 | AES-256-GCM-SIV (BatFS), AES-256-GCM (TLS) |
+//! | AEAD outside CNSA | plain ChaCha20-Poly1305 | AES-256-GCM-SIV (SealFS), AES-256-GCM (TLS) |
 //! | RNG | fail-soft on RNDR absent | fail-closed: kernel halts at boot |
 //!
 //! The policy gate is a small set of compile-time-evaluated boolean
@@ -125,7 +125,7 @@ pub const fn is_permitted(algo: Algo) -> bool {
 /// Caller-side enforcement helper. Returns `Ok(())` if the algorithm
 /// is permitted, `Err("...")` with a human-readable reason otherwise.
 /// Wire this into negotiation entry points (TLS cipher-suite select,
-/// X.509 signature-algorithm check, BatFS key-wrap entry, etc.).
+/// X.509 signature-algorithm check, SealFS key-wrap entry, etc.).
 pub fn ensure_permitted(algo: Algo) -> Result<(), &'static str> {
     if is_permitted(algo) {
         Ok(())

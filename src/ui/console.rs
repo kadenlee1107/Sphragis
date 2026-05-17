@@ -608,7 +608,7 @@ fn mirror_to_serial(s: &str) {
 // This is the load-bearing primitive behind the shell's `>`
 // redirect operator: the shell's `execute` checks for ` > <file>`,
 // wraps the inner command in begin/end_capture, then writes the
-// captured bytes to BatFS via `batfs::ns_create`.
+// captured bytes to SealFS via `sealfs::ns_create`.
 //
 // Future `|` pipes will use the same buffer as the donor of the
 // left side and feed it as input to the right side; a handful of

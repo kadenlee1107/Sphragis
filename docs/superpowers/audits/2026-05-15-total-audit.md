@@ -12,7 +12,7 @@
 
 Three patterns emerge across all six audits:
 
-1. **The V11/2026-05-06 hardening sweep has substantially regressed.** Multiple "closed" findings from the prior audit are back open in the current code — most prominently the BatFS spinlock (FS-C1), the SVC source-EL check (Mem-H1), and the per-host SPKI pinning (Crypto-F3 was wired then unwired). This is the most actionable category — these fixes are mechanical and were once landed.
+1. **The V11/2026-05-06 hardening sweep has substantially regressed.** Multiple "closed" findings from the prior audit are back open in the current code — most prominently the SealFS spinlock (FS-C1), the SVC source-EL check (Mem-H1), and the per-host SPKI pinning (Crypto-F3 was wired then unwired). This is the most actionable category — these fixes are mechanical and were once landed.
 
 2. **Two parallel syscall paths exist with asymmetric hardening.** The Linux ABI compatibility layer in `caves/linux/syscall.rs` correctly applies `uaccess::is_user_range`, per-cave FD tables, and seccomp-style filtering. The native kernel syscall path in `kernel/syscall.rs` does none of these. Most criticals (Cave-C1/C2/C3, Mem-C1) live on the native side. The fix is to either remove the native path entirely (refuse SVC ≠ 0 from EL0) or apply the Linux-side discipline to it.
 
@@ -31,10 +31,10 @@ The fourth, less concentrated pattern: **modules implemented but not wired.** OC
 | **Crypto-F1** | 🔴 CRITICAL | TLS handshake accepts session without CertificateVerify | `net/tls.rs:901-1094` |
 | **Crypto-F2** | 🔴 CRITICAL | TLS handshake accepts Finished before Certificate | `net/tls.rs:907-1094` |
 | **Net-F1** | 🔴 CRITICAL | IPv4 fragments dispatched as if complete datagrams | `net/ip.rs:71-101` |
-| **FS-C1** | 🔴 CRITICAL | BatFS spinlock + RAII guard around create/read/delete/list/stats — REGRESSED, no lock today | `fs/batfs.rs:835/983/1028/1082/1093/1100` |
-| **FS-C2** | 🔴 CRITICAL | `wipe::destroy_keys()` is a no-op for the BatFS master key | `security/wipe.rs:111-129` |
-| **FS-C3** | 🔴 CRITICAL | `verify_all_integrity()` is a tautology — cannot detect tampering | `fs/batfs.rs:185-189` |
-| **FS-C4** | 🔴 CRITICAL | ChaCha20-Poly1305 nonce derivation: CTR-style persistent prefix, no per-volume/cave key | `fs/batfs.rs:347-365` + `:686` |
+| **FS-C1** | 🔴 CRITICAL | SealFS spinlock + RAII guard around create/read/delete/list/stats — REGRESSED, no lock today | `fs/sealfs.rs:835/983/1028/1082/1093/1100` |
+| **FS-C2** | 🔴 CRITICAL | `wipe::destroy_keys()` is a no-op for the SealFS master key | `security/wipe.rs:111-129` |
+| **FS-C3** | 🔴 CRITICAL | `verify_all_integrity()` is a tautology — cannot detect tampering | `fs/sealfs.rs:185-189` |
+| **FS-C4** | 🔴 CRITICAL | ChaCha20-Poly1305 nonce derivation: CTR-style persistent prefix, no per-volume/cave key | `fs/sealfs.rs:347-365` + `:686` |
 | **Drv-C1** | 🔴 CRITICAL | `reset_for_cave_switch` not wired for 6 of 8 UI apps + tablet + clipboard | `caves/cave.rs:2212-2258` |
 | **Drv-C2** | 🔴 CRITICAL | COMMS AEAD has no associated data — nonce is the only direction-bind | `ui/apps/comms.rs:370/422` |
 | **Drv-C3** | 🔴 CRITICAL | COMMS KDF does not commit identity pubkeys | `ui/apps/comms.rs:486-506` |
@@ -52,12 +52,12 @@ The fourth, less concentrated pattern: **modules implemented but not wired.** OC
 | **Net-F4** | 🟠 HIGH | ICMP echo reply un-rate-limited; payload reflected verbatim (DRDoS amplifier) | `net/icmp.rs:29-39` |
 | **Net-F5** | 🟠 HIGH | TCP options completely ignored on receive (MSS/WS/SACK attacks) | `net/tcp.rs:1356-1362` |
 | **Net-F6** | 🟠 HIGH | Conntrack 4-tuple ignores destination IP (multi-NIC port collision) | `net/conntrack.rs:60-78/168-191` |
-| **FS-H1** | 🟠 HIGH | Cave-mount-namespace separator unvalidated → confused-deputy cross-cave access | `caves/cave.rs:1363-1395` + `fs/batfs.rs:422-434` |
-| **FS-H2** | 🟠 HIGH | Init ordering: BatFS init runs before crypto self-tests; RNG not fail-closed on RNDR-absent | `main.rs:194-283` |
+| **FS-H1** | 🟠 HIGH | Cave-mount-namespace separator unvalidated → confused-deputy cross-cave access | `caves/cave.rs:1363-1395` + `fs/sealfs.rs:422-434` |
+| **FS-H2** | 🟠 HIGH | Init ordering: SealFS init runs before crypto self-tests; RNG not fail-closed on RNDR-absent | `main.rs:194-283` |
 | **FS-H3** | 🟠 HIGH | RNG seed entropy structurally weak when RNDR unavailable (8× `cntpct_el0` reads) | `crypto/rng.rs:100-116` |
-| **FS-H4** | 🟠 HIGH | Filesystem name lookups leak file existence via timing | `fs/batfs.rs:1126-1135` |
-| **FS-H5** | 🟠 HIGH | `init_disk` races against publishing `INITIALIZED=true` | `fs/batfs.rs:228-231` |
-| **FS-H6** | 🟠 HIGH | Filenames are plaintext on disk (no inode-table encryption) | `fs/batfs_disk.rs:58-59` |
+| **FS-H4** | 🟠 HIGH | Filesystem name lookups leak file existence via timing | `fs/sealfs.rs:1126-1135` |
+| **FS-H5** | 🟠 HIGH | `init_disk` races against publishing `INITIALIZED=true` | `fs/sealfs.rs:228-231` |
+| **FS-H6** | 🟠 HIGH | Filenames are plaintext on disk (no inode-table encryption) | `fs/sealfs_disk.rs:58-59` |
 | **FS-H7** | 🟠 HIGH | Audit ring in-RAM only, no encrypted persistence, no automated off-platform seal | `security/audit.rs:348-361` + `audit_chain.rs:22` |
 | **Drv-H1** | 🟠 HIGH | AGENT synchronous `ask()` blocks UI loop — Phase-5 DoS via withheld SSE | `ui/apps/agent.rs:402-441` |
 | **Drv-H2** | 🟠 HIGH | `from_utf8_unchecked` invariant on agent response one PR away from breaking | `ui/apps/agent.rs:288-295` |
@@ -107,7 +107,7 @@ From `project_security_bar.md` and the 2026-05-06 audit's "elite additions still
 | ChaCha20-Poly1305 | ✅ Wired | `crypto/chacha20poly1305.rs`; AEAD-correct |
 | Ed25519 verify | ✅ Resolved | Now via `ed25519-compact` crate (prior in-tree quarantine deleted) |
 | X25519 + low-order subgroup check | ✅ Yes | `is_low_order_x25519` table from RFC 7748 §6.1 |
-| AES-GCM-SIV (BatFS at-rest) | ❌ No | BatFS still uses non-SIV ChaCha20-Poly1305 (FS-C4) |
+| AES-GCM-SIV (SealFS at-rest) | ❌ No | SealFS still uses non-SIV ChaCha20-Poly1305 (FS-C4) |
 | ML-KEM-768 (Kyber, FIPS 203) | ✅ Wired | `pq_hybrid.rs`, codepoint 0x11EC active by default |
 | ML-DSA-65 (Dilithium, FIPS 204) | ⚠️ Primitive wired; not yet in X.509 / CertVerify | No IETF draft live for TLS yet |
 | BLAKE3 | ✅ Wired | `crypto/blake3.rs`, non-FIPS auxiliary |
@@ -141,7 +141,7 @@ From `project_security_bar.md` and the 2026-05-06 audit's "elite additions still
 | AES-GCM-SIV at-rest | ❌ No | FS-C4 (ChaCha20-Poly1305 with CTR-style nonces, no per-volume/cave KDF) |
 | Per-block Merkle tree | ⚠️ Partial | Per-file Merkle root computed; verifier is tautological (FS-C3) |
 | Anti-rollback monotonic counter | ❌ No | `boot_counter` exists but doesn't gate beyond detecting disk-image swap |
-| Argon2id passphrase KDF | ✅ Yes | Auth + BatFS master, with SHA fallback (FS-M7) |
+| Argon2id passphrase KDF | ✅ Yes | Auth + SealFS master, with SHA fallback (FS-M7) |
 | Plausible-deniability hidden volumes | ❌ No | Not implemented |
 | Anti-cold-boot via SIMD-resident keys | ❌ No | `MASTER_KEY` plaintext in DRAM for entire session |
 
@@ -172,7 +172,7 @@ From `project_security_bar.md` and the 2026-05-06 audit's "elite additions still
 |---|---|---|
 | Hash-chain across entries | ✅ Yes | `audit_chain.rs`, SHA-256 |
 | HMAC per entry (key-only-in-SEP) | ❌ No | Cave-M1: plain SHA-256, attacker with kernel write can roll the chain |
-| WORM (append-only) off-platform export | ❌ No | `flush_to_batfs` is delete-then-create |
+| WORM (append-only) off-platform export | ❌ No | `flush_to_sealfs` is delete-then-create |
 | Categories cover all subsystems | ⚠️ Partial | Cave-M2: missing Crypto, Net, Fs, KeyRotate, TpiOp categories |
 | Per-entry `cave_id` field | ❌ No | Cave-M3: provenance in message text only |
 | Audit entries from UI apps | ❌ No | Drv-H5: zero call sites in any UI app |
@@ -195,7 +195,7 @@ From `project_security_bar.md` and the 2026-05-06 audit's "elite additions still
 
 The 2026-05-06 audit closed 35 of 43 findings across 16 commits on `fix/security-hardening`. Several of those closures are no longer present in the current `main`:
 
-- **FS-C1** — BatFS RAII guard / spinlock around create/read/delete/list/stats: the 16-commit hardening commit `537abd80` added a SpinLock + RAII guard; **the current code at `fs/batfs.rs:835/983/1028/1082/1093/1100` has no lock.** The only sync site is `next_nonce()`'s IrqGuard. The UAF/double-free race is back.
+- **FS-C1** — SealFS RAII guard / spinlock around create/read/delete/list/stats: the 16-commit hardening commit `537abd80` added a SpinLock + RAII guard; **the current code at `fs/sealfs.rs:835/983/1028/1082/1093/1100` has no lock.** The only sync site is `next_nonce()`'s IrqGuard. The UAF/double-free race is back.
 - **Mem-H1** — SVC source-EL check: prior F3 closure included an SPSR.M check before SVC dispatch. The current code at `kernel/arch/mod.rs:654-680` has no such check.
 - **Crypto-F3** — STRICT_MODE pin enforcement: prior `c862c6ba` + `996fc256` wired cert pinning into the TLS handshake. `cert_pin::check` is still defined but no longer called from `verify_chain`.
 
@@ -249,9 +249,9 @@ The remediation pattern is identical: trace every `pub fn` that exists in a secu
 
 2. **Cave-C1 + Mem-H1** — Consolidate syscall paths. Refuse `svc N ≠ 0` from EL0 at `kernel/arch/mod.rs::handle_sync_exception`. Add SPSR.M check before SVC dispatch. The native path becomes kernel-internal only. Estimated effort: 1 day.
 
-3. **FS-C1** — Restore the BatFS spinlock + RAII guard around create/read/delete/list/stats (re-land the patch from `537abd80`). Add regression test. Estimated effort: 0.5 day.
+3. **FS-C1** — Restore the SealFS spinlock + RAII guard around create/read/delete/list/stats (re-land the patch from `537abd80`). Add regression test. Estimated effort: 0.5 day.
 
-4. **FS-C2** — Implement `batfs::wipe_master_key()` that actually zeroes `MASTER_KEY` + `BOOT_NONCE_PREFIX` + `FILES[]` under `critical_section!`; reorder `wipe::execute` to call it after `wipe_filesystem`. Estimated effort: 0.5 day.
+4. **FS-C2** — Implement `sealfs::wipe_master_key()` that actually zeroes `MASTER_KEY` + `BOOT_NONCE_PREFIX` + `FILES[]` under `critical_section!`; reorder `wipe::execute` to call it after `wipe_filesystem`. Estimated effort: 0.5 day.
 
 5. **Crypto-F3 + Crypto-F4** — Wire `cert_pin::check` and `ocsp::status` / `crl::is_revoked` into `verify_chain`. Estimated effort: 0.5 day.
 
@@ -269,7 +269,7 @@ The remediation pattern is identical: trace every `pub fn` that exists in a secu
 
 10. **FS-C3** — Replace tautological `verify_all_integrity` with HMAC-signed root anchored in a sealed audit-chain entry or external WORM.
 
-11. **FS-C4** — Migrate BatFS to AES-GCM-SIV (or commit to ChaCha20-Poly1305 with per-cave KDF + bound nonces in AAD).
+11. **FS-C4** — Migrate SealFS to AES-GCM-SIV (or commit to ChaCha20-Poly1305 with per-cave KDF + bound nonces in AAD).
 
 12. **Drv-C2 + Drv-C3** — COMMS AAD bind + KDF include id_pk.
 

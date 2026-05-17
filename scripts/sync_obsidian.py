@@ -584,7 +584,7 @@ SUBSYSTEM_VOICE = [
     ("src/security/audit","the audit ring — append-only, encrypted, kernel-only writer"),
     ("src/security/",     "kernel-side security primitives"),
     ("src/auth/",         "the authentication path — passphrase, KDF, lock-screen"),
-    ("src/batfs/",        "the encrypted filesystem (BatFS — ChaCha20-Poly1305 + Argon2id)"),
+    ("src/sealfs/",        "the encrypted filesystem (SealFS — ChaCha20-Poly1305 + Argon2id)"),
     ("src/cave/",         "the Cave isolation model — capability-typed processes"),
     ("src/drivers/apple/","an Apple-Silicon-specific driver, reverse-engineered from real M4 hardware"),
     ("src/drivers/",      "a kernel driver"),

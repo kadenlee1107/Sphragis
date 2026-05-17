@@ -31,7 +31,7 @@ entry `maybe_yield`). Every V5 multi-step sequence is now a preempt window.
 - `frame::alloc/free/alloc_kernel/free_contig` bitmap load/OR/store — kmem-1, toctou-1, irq-#7
 - `threads::schedule` (two `with_table` flanks around cxt_switch) — irq-#10
 - `threads::clone` slot publish — irq-#3
-- `batfs::init` nonce_prefix/counter publish — toctou-10, crypto-4
+- `sealfs::init` nonce_prefix/counter publish — toctou-10, crypto-4
 - `sys_pipe2`/`accept4`/`dup`/`dup3` charge→alloc→refund triples — irq-#4
 - `tls::reset_all_sessions` loop — irq-#6
 - `sockets::reset_for_cave_switch` / `tcp::reset_for_cave_switch` — irq-#8/9
@@ -61,7 +61,7 @@ added fd/sockets/tcp. Still missing:
 - DNS EXPECTED_TXID/RESOLVED_IP (xlayer-B)
 - PROC_FD_*, SOCK_DEST_IP/PORT/LOCAL_PORT, WORKER_BRK (static-audit-A)
 - THREADS[128], CAVE_IPC[16] (static-audit-A)
-- BatFS FILES/MERKLE_TREE/MASTER_KEY (global FS — per-cave namespace needed)
+- SealFS FILES/MERKLE_TREE/MASTER_KEY (global FS — per-cave namespace needed)
 
 **Correct fix**: one `cave::reset_all_globals()` function in cave.rs fans
 out to every subsystem's `reset_for_cave_switch()`. Every new `static mut`
@@ -106,7 +106,7 @@ a single compound store; reader sees inconsistent field pairs otherwise."
   under concurrent auth** (toctou-4)
 - `crypto::rng::STATE_LO/STATE_HI` two Relaxed u64 stores → torn DRBG
   state → correlated keystreams (toctou-4, crypto-4)
-- `batfs::INITIALIZED` writer has SeqCst fence; reader is plain-bool
+- `sealfs::INITIALIZED` writer has SeqCst fence; reader is plain-bool
   (invariants-6, static-audit-B)
 - `frame::BITMAP` load/OR/store no CAS (kmem-1, toctou-2)
 - `ACTIVE_CAVE_ID` Relaxed both sides (invariants-1)
@@ -149,7 +149,7 @@ them on every exit, including panic."
   (err-001)
 - `process_server_hello` Err leaves peer_public + shared_secret (err-002)
 - `recv_app_data` alert + GCM-fail only wipe 2 keys (err-003)
-- `batfs::read` leaves attacker-influenced ciphertext in caller buf on
+- `sealfs::read` leaves attacker-influenced ciphertext in caller buf on
   HMAC fail (err-004)
 - `auth::authenticate` drops input_hash without volatile wipe (err-007)
 - `panic_handler` does NOTHING — cold-boot capture gets all keys (err-008)
@@ -240,13 +240,13 @@ validate the payload — re-check independently."
 
 ---
 
-## ROOT 11 — AES with lookup-table S-box in BatFS  [CRIT, retires 2]
+## ROOT 11 — AES with lookup-table S-box in SealFS  [CRIT, retires 2]
 
-TLS migrated to RustCrypto `aes` (bitsliced/HW). BatFS still uses the
+TLS migrated to RustCrypto `aes` (bitsliced/HW). SealFS still uses the
 hand-rolled `Aes256` with LUT → cache-timing key recovery on every
 file read (ct-audit P0-1).
 
-**Correct fix**: BatFS → RustCrypto `aes::Aes256` + `gcm_verified`
+**Correct fix**: SealFS → RustCrypto `aes::Aes256` + `gcm_verified`
 (replace hand-rolled Aes256, migrate from CTR-with-plaintext-hash to
 GCM or XTS).
 
@@ -274,7 +274,7 @@ ROOT 7 (EL0 time) ── weakens ──> many side-channel ROOT-6 attacks
 ROOT 8 (uaccess) ── independent ──> direct kernel write primitives
 ROOT 9 (C FFI) ── architectural ──> move to cave sandbox
 ROOT 10 (parser trust) ── independent ──> multi-protocol
-ROOT 11 (BatFS AES LUT) ── independent ──> crate swap
+ROOT 11 (SealFS AES LUT) ── independent ──> crate swap
 ROOT 12 (X25519 field_reduce) ── independent ──> small patch or crate swap
 ```
 
@@ -286,7 +286,7 @@ ROOT 12 (X25519 field_reduce) ── independent ──> small patch or crate sw
 4. **ROOT 4** (atomic ordering) — now that critical_section! exists
 5. **ROOT 2** (reset_all_globals() + per-cave FS namespace) — builds on ROOT 1
 6. **ROOT 6** (err-zeroize wrappers) — uses critical_section!
-7. **ROOT 11** (BatFS → Aes256 RustCrypto)
+7. **ROOT 11** (SealFS → Aes256 RustCrypto)
 8. **ROOT 12** (X25519 field_reduce)
 9. **ROOT 10** (parser trust)
 10. **ROOT 7** (EL0 time quantization + TRNG mandatory)

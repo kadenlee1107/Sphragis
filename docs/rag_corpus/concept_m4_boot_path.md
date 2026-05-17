@@ -15,7 +15,7 @@ topic: boot
 4. **m1n1 stage 1** (vendored under [[external/m1n1]]) does the bring-up: parses ADT, pre-configures the AIC and PMGR, sets up the framebuffer, and exposes a USB proxy protocol for the host.
 5. **m1n1 stage 2** is loaded over the USB proxy by the host running [[external/m1n1/proxyclient/tools/chainload.py]]. **The flag that matters here is `-S` / `--skip-secondary-cpus`** — without it, the M4 P-cluster SErrors on the RVBAR writes m1n1 normally does. The vendored copy of `chainload.py` has the flag pre-applied so we don't forget.
 6. **Sphragis kernel image** (`target/aarch64-unknown-none/release/sphragis`) is uploaded by the same proxy and entered at its reset vector.
-7. **`kernel_main_apple`** (in [[src/main.rs]]) is the first SPHRAGIS-authored function to execute on real M4 silicon. From there: cpu init, mmu setup, ADT walk, driver bring-up, BatFS mount, lock screen.
+7. **`kernel_main_apple`** (in [[src/main.rs]]) is the first SPHRAGIS-authored function to execute on real M4 silicon. From there: cpu init, mmu setup, ADT walk, driver bring-up, SealFS mount, lock screen.
 
 ## What the host computer does
 

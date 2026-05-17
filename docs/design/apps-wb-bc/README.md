@@ -68,7 +68,7 @@ Ported to Rust as STUMP #133:
 
 ## Deviations
 
-1. **Bookmarks aren't persisted.** Hardcoded list. Adding BatFS
+1. **Bookmarks aren't persisted.** Hardcoded list. Adding SealFS
    read/write per bookmark is a follow-up STUMP.
 2. **No real favicon fetch.** Hash-derived swatch colors only.
 3. **Star button is decorative.** No bookmark-add action wired.

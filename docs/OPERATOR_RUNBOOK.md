@@ -16,7 +16,7 @@ Sphragis ships two build profiles. Choose at deploy time; cannot be switched at 
 | `community` (default) | `cargo build --release --target aarch64-unknown-none --features gicv3` | Development, research, demo, non-gov deployment. All crypto algorithms available; fail-soft on RNG. |
 | `sphragis-gov` | `cargo build --release --target aarch64-unknown-none --features gicv3,gov-strict` | Gov / high-assurance deployment. CNSA 2.0 enforced at the policy gate (rejects AES-128, SHA-256-for-signing, RSA, ECDSA, plain ChaCha20-Poly1305). RNG fail-closed at boot if ARMv8.5 FEAT_RNG absent. |
 
-**The gov-strict build's TLS handshakes today fail-closed** because the AES-256-GCM-SHA384 cipher path isn't fully plumbed end-to-end (SP-B1.6.1 follow-up). Until that lands, gov-strict is suitable for offline + air-gapped use, not for direct TLS-based connectivity. Plan a phased deployment: dev on community build, then graduate to gov-strict once your specific TLS-peer or BatFS-only-no-TLS scenario is validated.
+**The gov-strict build's TLS handshakes today fail-closed** because the AES-256-GCM-SHA384 cipher path isn't fully plumbed end-to-end (SP-B1.6.1 follow-up). Until that lands, gov-strict is suitable for offline + air-gapped use, not for direct TLS-based connectivity. Plan a phased deployment: dev on community build, then graduate to gov-strict once your specific TLS-peer or SealFS-only-no-TLS scenario is validated.
 
 ## 2. Hardware target selection
 
@@ -90,9 +90,9 @@ Audit-trail: every TPI step (propose, cosign, consume, reject) is recorded under
 
 `audit` shell command — shows the last N events with category, cave_id, timestamp, message. Default N=20.
 
-### 6.2 Flush ring to BatFS
+### 6.2 Flush ring to SealFS
 
-`audit-flush` — persists the resident ring to `/audit.log` in BatFS. Idempotent overwrite. Run before any operation that might evict events (long-running test, kernel panic, planned reboot).
+`audit-flush` — persists the resident ring to `/audit.log` in SealFS. Idempotent overwrite. Run before any operation that might evict events (long-running test, kernel panic, planned reboot).
 
 ### 6.3 Verify the chain
 
@@ -100,7 +100,7 @@ Audit-trail: every TPI step (propose, cosign, consume, reject) is recorded under
 
 ### 6.4 Offline verification (forensic context)
 
-After `audit-flush` exports `/audit.log` to BatFS, copy it out to a forensic workstation and run:
+After `audit-flush` exports `/audit.log` to SealFS, copy it out to a forensic workstation and run:
 
 ```bash
 python3 tools/audit-verifier/audit_verifier.py --summary /path/to/audit.log
@@ -138,7 +138,7 @@ Before deploying a gov-strict build to a real device, verify:
 - [ ] Initial passphrase provisioned + immediately rotated post-boot
 - [ ] TPI officer Ed25519 keypairs generated + public keys registered
 - [ ] Operator-CA HSM provisioned per `DESIGN_HSM_OPERATOR_CA.md` (SP-C1.6.IMPL)
-- [ ] Endorsement cert issued + copied to device's BatFS at `/attest/endorsement.cbor` (SP-C1.6.IMPL)
+- [ ] Endorsement cert issued + copied to device's SealFS at `/attest/endorsement.cbor` (SP-C1.6.IMPL)
 
 Until the SP-X.IMPL items land, the gov-strict deployment is partial — operator documents the gaps + accepts the bounded risk in their ATO package.
 
@@ -185,7 +185,7 @@ Relevant commands:
 ### 10.1 Suspected audit-log tampering
 
 1. `audit-chain` to detect: returns `FirstMismatchAt(idx)` if any entry's chain hash doesn't match.
-2. `audit-flush` to persist the (possibly-tampered) ring to BatFS for forensic capture.
+2. `audit-flush` to persist the (possibly-tampered) ring to SealFS for forensic capture.
 3. Copy `/audit.log` off-platform to a forensic workstation.
 4. Run `python3 tools/audit-verifier/audit_verifier.py --summary` to enumerate.
 5. Cross-reference against the operator's off-platform seal (audit-seal output) to bound the tampering window.
@@ -207,13 +207,13 @@ If a TPI officer's private key is suspected compromised:
 
 ### 10.4 Emergency wipe (lost device)
 
-`Ctrl+W` from the lock screen triggers `wipe::execute(WipeReason::Panic, false)`. On real M4 this halts the SoC; cold-boot would re-encrypt the BatFS storage. The wipe path:
+`Ctrl+W` from the lock screen triggers `wipe::execute(WipeReason::Panic, false)`. On real M4 this halts the SoC; cold-boot would re-encrypt the SealFS storage. The wipe path:
 - Zeros DRBG state (`rng::panic_wipe`)
 - Sets the POISONED flag so post-panic `fill_bytes` halts
 - Issues a final UART message
 - WFE-loops forever
 
-For "device lost while powered off," the BatFS at-rest encryption (AES-256-GCM-SIV with Argon2id-protected master key) defends against offline data extraction.
+For "device lost while powered off," the SealFS at-rest encryption (AES-256-GCM-SIV with Argon2id-protected master key) defends against offline data extraction.
 
 ## 11. Quick reference card
 

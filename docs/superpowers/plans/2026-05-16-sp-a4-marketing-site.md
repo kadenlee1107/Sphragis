@@ -221,7 +221,7 @@ Structure:
 - TCB measurement (~70-80K LoC Rust)
 - Cave model + per-cave ASIDs
 - Crypto stack (CNSA 2.0 alignment)
-- BatFS encrypted filesystem
+- SealFS encrypted filesystem
 - HMAC audit chain
 - Attestation primitive
 - Build chain

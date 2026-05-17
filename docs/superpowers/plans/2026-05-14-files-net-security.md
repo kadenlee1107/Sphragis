@@ -1181,7 +1181,7 @@ use crate::ui::widgets::{
     paint_file_preview,
 };
 use crate::ui::wm::WindowRect;
-use crate::fs::batfs;
+use crate::fs::sealfs;
 
 const NAME_MAX: usize = 64;
 
@@ -1239,7 +1239,7 @@ fn paint_sidebar(rect: WindowRect) {
     let fb = gpu::framebuffer();
     let screen_w = gpu::width();
 
-    let (count, _max) = batfs::ns_stats();
+    let (count, _max) = sealfs::ns_stats();
     // Header: "FILES (n)"
     let mut hdr_buf = [0u8; 24];
     hdr_buf[..7].copy_from_slice(b"FILES (");
@@ -1255,7 +1255,7 @@ fn paint_sidebar(rect: WindowRect) {
     let sel = selected_file();
     let mut row_index: usize = 0;
 
-    batfs::ns_list(|name, _size, encrypted| {
+    sealfs::ns_list(|name, _size, encrypted| {
         let row_y = rect.y + 28 + (row_index as u32) * row_h;
         if row_y + row_h > rect.y + rect.h { return; }
 
@@ -1280,7 +1280,7 @@ fn paint_detail_view(rect: WindowRect) {
     let fb = gpu::framebuffer();
     let screen_w = gpu::width();
 
-    let (count, _max) = batfs::ns_stats();
+    let (count, _max) = sealfs::ns_stats();
     if count == 0 {
         font::draw_str(fb, screen_w, rect.x + 14, rect.y + 14,
                        "No files. Create one via SHELL or EDITOR.", p::MID, p::BG);
@@ -1294,7 +1294,7 @@ fn paint_detail_view(rect: WindowRect) {
     let mut size: usize = 0;
     let mut encrypted = false;
     let mut row_index: usize = 0;
-    batfs::ns_list(|n, s, e| {
+    sealfs::ns_list(|n, s, e| {
         if row_index == sel {
             let l = n.len().min(NAME_MAX);
             name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -1361,7 +1361,7 @@ fn paint_delete_modal(idx: usize) {
     let mut name_buf = [0u8; NAME_MAX];
     let mut name_len = 0;
     let mut row_index: usize = 0;
-    batfs::ns_list(|n, _s, _e| {
+    sealfs::ns_list(|n, _s, _e| {
         if row_index == idx {
             let l = n.len().min(NAME_MAX);
             name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -1381,7 +1381,7 @@ fn paint_delete_modal(idx: usize) {
     let modal = ConfirmModal {
         title,
         body_lines: &[
-            "  remove the file from BatFS",
+            "  remove the file from SealFS",
             "  zero its encrypted blocks",
             "  add a tombstone to the audit chain",
             "",
@@ -1402,7 +1402,7 @@ fn actions_for_file(_encrypted: bool) -> [Action<'static>; 2] {
 fn load_preview(name: &str, encrypted: bool) {
     let buf_ptr = core::ptr::addr_of_mut!(PREVIEW_BUF) as *mut u8;
     let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, 8192) };
-    let result = batfs::read(name, buf);
+    let result = sealfs::read(name, buf);
     let len = result.unwrap_or(0);
     unsafe {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PREVIEW_LEN), len);
@@ -1421,7 +1421,7 @@ pub fn handle_key(c: u8) -> AppEvent {
 }
 
 fn handle_key_viewing(c: u8) -> AppEvent {
-    let (count, _max) = batfs::ns_stats();
+    let (count, _max) = sealfs::ns_stats();
     match c {
         0x90 => {  // Arrow Up — scroll preview up
             let v = viewport_start();
@@ -1460,7 +1460,7 @@ fn handle_key_delete_modal(c: u8, idx: usize) -> AppEvent {
             let mut name_buf = [0u8; NAME_MAX];
             let mut name_len = 0;
             let mut row_index: usize = 0;
-            batfs::ns_list(|n, _s, _e| {
+            sealfs::ns_list(|n, _s, _e| {
                 if row_index == idx {
                     let l = n.len().min(NAME_MAX);
                     name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -1471,7 +1471,7 @@ fn handle_key_delete_modal(c: u8, idx: usize) -> AppEvent {
             if name_len > 0 {
                 let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
                 // TODO(Wave 5): surface Err in modal footer per spec §Destroy.
-                let _ = batfs::ns_delete(name);
+                let _ = sealfs::ns_delete(name);
             }
             set_selected_file(0);
             unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing; }
@@ -1507,7 +1507,7 @@ fn handle_click_viewing(mx: i32, my: i32, body: WindowRect) -> AppEvent {
         let header_h: u32 = 28;
         if my >= (sidebar.y + header_h) as i32 {
             let row_idx = ((my as u32 - sidebar.y - header_h) / row_h) as usize;
-            let (count, _max) = batfs::ns_stats();
+            let (count, _max) = sealfs::ns_stats();
             if row_idx < count {
                 set_selected_file(row_idx);
                 return AppEvent::Repaint;
@@ -1599,10 +1599,10 @@ Inspector layout: sidebar = file list (state dot = encrypted/plain),
 detail panel = filename + 1-line metadata strip + preview (text or
 hex auto-sniffed) + action strip. Up/Down arrows scroll the preview
 viewport. D triggers ConfirmDelete modal (double-tap commits via
-batfs::ns_delete). E shows FAINT (Wave 5 EDITOR stub).
+sealfs::ns_delete). E shows FAINT (Wave 5 EDITOR stub).
 
 Preview cache (8 KB, invalidated on selection change) reads via
-batfs::read. Encrypted files without the active cave key show
+sealfs::read. Encrypted files without the active cave key show
 "encrypted; preview requires cave context" instead of garbled hex.
 
 Co-Authored-By: claude-flow <ruv@ruv.net>
@@ -2028,7 +2028,7 @@ pub fn paint(body: WindowRect) {
             title: "Wipe entire system?",
             body_lines: &[
                 "  zero all cave keys",
-                "  wipe BatFS",
+                "  wipe SealFS",
                 "  zero the audit ring",
                 "  clear MLS labels + taint records",
                 "  halt the kernel",
@@ -2503,7 +2503,7 @@ Per the spec §"What's NOT in v1," none of the following land in this plan:
 - NET activity filter UI
 - TAINT operator-defined bit dictionary
 - Per-cave NET enforcement
-- BatFS rename / new-file APIs
+- SealFS rename / new-file APIs
 - Animations
 - Right-click context menus
 

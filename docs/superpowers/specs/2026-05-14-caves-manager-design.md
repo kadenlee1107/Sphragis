@@ -166,7 +166,7 @@ Press `D` (or click `[D]estroy`) on a selected cave → centered modal overlay. 
 - Body lists the irreversible consequences:
   - kill all processes inside the cave
   - zero the cave's encryption keys
-  - wipe its BatFS subtree
+  - wipe its SealFS subtree
   - clear MLS labels + taint records
 - Footer: `IRREVERSIBLE.` in INK on its own line
 - Commit hint: `D again to confirm · Esc to cancel`

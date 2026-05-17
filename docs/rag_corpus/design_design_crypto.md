@@ -36,13 +36,13 @@ salt) can run offline brute-force / dictionary attacks on GPUs/ASICs.
 |---|---|
 | Best primitive | **Argon2id**, m=256 MiB, t=3, p=1 |
 | Why | Memory-hard → GPU/ASIC cost is ~linear in memory. Best KDF since 2015 (winner of PHC). NIST SP 800-132 recommends it. |
-| Current state | ✅ Argon2id at 8 MiB × 3 passes × 1 lane in BOTH the auth-gate KDF (`security/auth.rs::kdf`, salt `sphragis-auth-v2`) AND the BatFS master KDF (`main.rs::derive_batfs_key`, salt `sphragis-batfs-v3`, STUMP #138). Per-cave `fs_key` is HMAC-SHA256 keyed by the BatFS master (STUMP #111 audit C011) — cheap because it's not a passphrase derivation. |
+| Current state | ✅ Argon2id at 8 MiB × 3 passes × 1 lane in BOTH the auth-gate KDF (`security/auth.rs::kdf`, salt `sphragis-auth-v2`) AND the SealFS master KDF (`main.rs::derive_sealfs_key`, salt `sphragis-sealfs-v3`, STUMP #138). Per-cave `fs_key` is HMAC-SHA256 keyed by the SealFS master (STUMP #111 audit C011) — cheap because it's not a passphrase derivation. |
 | Gap | The 256 MiB target is unreachable in our 32 MB kernel heap. Bumping the heap is a separate STUMP. 8 MiB still moves the bar by ~6 orders of magnitude vs the pre-#138 16-round SHA. Argon2id 256 MiB once we have heap space; "Phase B" target. |
 | PQ | N/A — symmetric, 256-bit output. |
 
 ---
 
-### 2. Filesystem encryption (BatFS files)
+### 2. Filesystem encryption (SealFS files)
 
 **Threat:** device theft, cold-boot attack, disk-image exfiltration.
 Adversary has the raw encrypted blocks and wants to read / tamper.
@@ -52,12 +52,12 @@ Adversary has the raw encrypted blocks and wants to read / tamper.
 | Best primitive | **AES-256-GCM-SIV** per file (nonce-misuse resistant) OR **XChaCha20-Poly1305** (longer nonce, no wraparound risk) |
 | Why | AEAD → confidentiality + authentication in one pass. GCM-SIV survives nonce-reuse (CTR mode does not). XChaCha20 with 192-bit nonces never reuses in practice. |
 | Current state | ✅ ChaCha20-Poly1305 AEAD per file. Per-file key via `sha256::derive_key(MASTER_KEY, filename)`. AAD = filename so an attacker can't rename ciphertext to a different slot. Tag stored in the on-disk inode (since STUMP #136). _(Doc-drift caught by STUMP #144 audit; previous text said AES-256-CTR + HMAC, which described an even-earlier construction.)_ |
-| Gap | None at this layer. Memory-encryption + a per-file additional-data binding to the BatFS inode is a future hardening pass. |
+| Gap | None at this layer. Memory-encryption + a per-file additional-data binding to the SealFS inode is a future hardening pass. |
 | PQ | Grover attack → effective 128-bit security. Still fine for 2040+. |
 
 ---
 
-### 3. Disk-block random access (future: BatFS block device)
+### 3. Disk-block random access (future: SealFS block device)
 
 **Threat:** same as above but we need to read/write 4 KB blocks without
 rewriting the whole file.
@@ -66,7 +66,7 @@ rewriting the whole file.
 |---|---|
 | Best primitive | **AES-256-XTS** |
 | Why | Industry standard for disk encryption (LUKS, FileVault, BitLocker). Block-number doubles as tweak; no nonce needed; no integrity but we do it at the filesystem layer separately. |
-| Current state | N/A — BatFS is per-file today, not block-based. |
+| Current state | N/A — SealFS is per-file today, not block-based. |
 | Gap | If/when we build a real block device abstraction. Not a priority. |
 
 ---
@@ -87,7 +87,7 @@ run, what targets, what stdout/stderr said).
 
 ---
 
-### 5. File integrity MAC (BatFS content verification)
+### 5. File integrity MAC (SealFS content verification)
 
 **Threat:** attacker flips bits in ciphertext hoping we decrypt to
 attacker-chosen bytes (malleability). HMAC makes this detectable.
@@ -96,7 +96,7 @@ attacker-chosen bytes (malleability). HMAC makes this detectable.
 |---|---|
 | Best primitive | **Poly1305** (keyed) — 128-bit tag, proven security, very fast |
 | Why | Poly1305 is one-time-MAC, paired with ChaCha20 it forms the AEAD. We'd drop HMAC-SHA256 once we move to AEAD. |
-| Current state | ✅ HMAC-SHA256 in `fs/batfs.rs::compute_file_mac`. Correct, just heavier than Poly1305. |
+| Current state | ✅ HMAC-SHA256 in `fs/sealfs.rs::compute_file_mac`. Correct, just heavier than Poly1305. |
 | Gap | Folded into gap #2 above (when we adopt AEAD, the separate MAC goes away). |
 
 ---
@@ -224,7 +224,7 @@ IPC (read its files via `batpipe`, etc.).
 
 3. **#4 Audit-log AEAD + Merkle chain** — finishes Phase 3's story. Moves from "confidential" to "confidential + integrity + tamper-evident". 1–2 hours.
 
-4. **#2 BatFS → ChaCha20-Poly1305** — cleans up the file-encryption path. Mostly a migration, not new crypto. 2–3 hours.
+4. **#2 SealFS → ChaCha20-Poly1305** — cleans up the file-encryption path. Mostly a migration, not new crypto. 2–3 hours.
 
 5. **#6 TLS post-quantum hybrid (X25519+ML-KEM)** — biggest *future* protection for long-term data. Real work (need a PQ crate) but significant. Half a day.
 

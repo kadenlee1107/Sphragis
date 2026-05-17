@@ -104,7 +104,7 @@ Hardware-root chain designed in `DESIGN_HSM_OPERATOR_CA.md`: SEP on M4 + TPM 2.0
 - **Reproducible builds verified** — `scripts/check_reproducible_build.sh` produces bit-identical SHA-256 across clean rebuilds (SP-BLD-002 closure 2026-05-16).
 - **SBOM per release** (`scripts/gen_sbom.py`).
 - **Sigstore release-signing** IMPL drafted (`.github-workflows-pending/release-sign.yml`); operator-side `tools/release-verifier/verify.sh`.
-- **WORM audit segment export** — `src/security/audit_worm.rs` HMAC-SHA-384 chained segments persist to BatFS; offline verifier walks the chain.
+- **WORM audit segment export** — `src/security/audit_worm.rs` HMAC-SHA-384 chained segments persist to SealFS; offline verifier walks the chain.
 
 ---
 
@@ -173,7 +173,7 @@ $ python3 tools/attest-verifier/attest_verifier.py attest-quote.bin
   records_in_current = 0
   prev_head_first8 = 7f3a91...
 
-[mount BatFS off-device, walk audit/worm/]
+[mount SealFS off-device, walk audit/worm/]
 
 $ python3 tools/audit-verifier/audit_verifier.py \
     --worm-dir audit/worm/ --key-hex $HMAC_KEY
@@ -189,7 +189,7 @@ Closes audit FS-H7 finding from the 2026-05-15 rolling security audit.
 | Audit week | Finding | Sphragis-side closure |
 |---|---|---|
 | Week 1 | TLS bypass | gov-strict policy gate rejects weak suites |
-| Week 1 | BatFS lock | IrqGuard around critical sections |
+| Week 1 | SealFS lock | IrqGuard around critical sections |
 | Week 5 | Constant-time HOTP | Cache-line-level discipline + unit tests |
 | Week 11 | Per-cave page tables | Per-cave L1 + per-cave ARMv8.5 ASIDs |
 | Week 14 | PSK overlay retire | Removed legacy path; gov-strict only |

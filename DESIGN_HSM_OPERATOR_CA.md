@@ -57,7 +57,7 @@ device                    operator-CA host                  HSM
   │ ◀──── 6. Endorsement cert ────  │                          │
   │       (statement || sig)        │                          │
   │                                 │                          │
-  │  7. Store in BatFS as           │                          │
+  │  7. Store in SealFS as           │                          │
   │     /attest/endorsement.cbor    │                          │
   │     for inclusion in Quotes     │                          │
 ```
@@ -135,7 +135,7 @@ Every endorsement issuance and every endorsement use is auditable:
 
 What SP-C1.6.IMPL must land:
 
-1. **Sphragis-side endorsement storage**: load `/attest/endorsement.cbor` from BatFS at boot; cache parsed endorsement; include in every Quote.
+1. **Sphragis-side endorsement storage**: load `/attest/endorsement.cbor` from SealFS at boot; cache parsed endorsement; include in every Quote.
 2. **Sphragis-side endorsement field in Quote struct**: add `endorsement: Vec<u8>` field; bump Quote wire format version.
 3. **Operator-CA host script**: Python or Rust tool that takes (device-pubkey, device-meas, serial), constructs the endorsement CBOR, calls HSM via PKCS#11 for signing, writes endorsement out as a file the operator copies to the device.
 4. **External verifier**: extend `tools/audit-verifier/` (or new `tools/attest-verifier/`) to validate the endorsement chain.
