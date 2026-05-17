@@ -81,7 +81,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | ISO-002 | P0 | ✅ HAVE | Per-cave ASIDs — week 11 (commit `7d86d273`) |
 | ISO-003 | P0 | ⚠️ PARTIAL | CIPSO/CALIPSO network labels exist (`src/net/cave_policy.rs`); IPC/shm side not labeled |
 | ISO-004 | P0 | ⚠️ PARTIAL | Week 3-4 closed Cave-H6 (`sys_connect` gates on cave_policy); **no CI lint** enforcing it on new syscall handlers |
-| ISO-005 | P0 | ❌ MISSING | Cave-H2 audit finding open: per-cave seccomp on native SVC≠0 path |
+| ISO-005 | P0 | ✅ HAVE | Cave-H2 structurally closed by commit `5dbba7fd` (audit-week-1, AUDIT-CAVE-C1 + AUDIT-MEM-H1). EL0-origin SVC#N!=0 is refused with EPERM + audit log at `src/kernel/arch/mod.rs:1308-1329`; EL1-origin SVC#N!=0 also refused. The audit's recommended fix was exactly this approach ("refuse SVC ≠ 0 from EL0 at the exception handler"). Per-cave seccomp on the native path is moot — no EL0 reachability remains. (SP-C5.1 verification, 2026-05-16.) |
 | ISO-006 | P1 | ✅ HAVE | `set_active` is `pub(crate)` — week 13 (commit `9249c4ff`) |
 | ISO-007 | P0 | ✅ HAVE | AF_UNIX per-cave — week 12 (commit `05a1384b`) |
 | ISO-008 | P1 | ❌ MISSING | AF_UNIX SOCK_DGRAM not implemented |
