@@ -261,6 +261,25 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // ordering invariant now).
     security::attest::init_kernel_measurement();
 
+    // SP-AUD-003 emit-site (2026-05-16): the kernel measurement
+    // computed above is the "applied" state of the system. Emit an
+    // UpdateApply audit event with the first 8 bytes of the
+    // measurement so forensic review can correlate boots with kernel
+    // versions. This is the closest analog to a "system update has
+    // been applied" event in a no-loadable-module monolithic kernel.
+    {
+        let m = security::attest::KernelMeasurement::current().0;
+        let mut msg = [0u8; 48];
+        let prefix = b"UpdateApply: kernel-measurement=";
+        msg[..prefix.len()].copy_from_slice(prefix);
+        let hex = b"0123456789abcdef";
+        for i in 0..8 {
+            msg[prefix.len() + i * 2] = hex[(m[i] >> 4) as usize];
+            msg[prefix.len() + i * 2 + 1] = hex[(m[i] & 0x0f) as usize];
+        }
+        security::audit::record(security::audit::Category::UpdateApply, &msg[..prefix.len() + 16]);
+    }
+
     // AUDIT-CRYPTO-F7 (2026-05-15): fail-closed boot-time crypto
     // self-tests. Run KATs for every primitive used in production
     // BEFORE any TLS / BatFS / IPC mount. The prior pattern was to
@@ -269,7 +288,20 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // before it can encrypt or decrypt anything with a broken
     // primitive.
     match crypto::run_self_tests() {
-        Ok(()) => drivers::uart::puts("  [crypto] self-tests PASS\n"),
+        Ok(()) => {
+            drivers::uart::puts("  [crypto] self-tests PASS\n");
+            // SP-AUD-003 emit-site (2026-05-16): the signature-verify
+            // primitives (LMS, ML-DSA-87) are operational. Sphragis
+            // has no in-tree loadable-module path today, but when SP-
+            // BLD-008 LMS-signed kernel updates land, this baseline
+            // records that the kernel was capable of validating them
+            // at boot. Forensic continuity: load attempts emit
+            // follow-up LoadableMod events with outcomes.
+            security::audit::record(
+                security::audit::Category::LoadableMod,
+                b"LoadableMod: signature-verify primitives ready (LMS+ML-DSA-87 KATs PASS)",
+            );
+        }
         Err(e) => {
             drivers::uart::puts("  [crypto] self-test FAIL: ");
             drivers::uart::puts(e);
