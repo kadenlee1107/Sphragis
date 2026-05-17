@@ -93,7 +93,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | ISO-006 | P1 | ✅ HAVE | `set_active` is `pub(crate)` — week 13 (commit `9249c4ff`) |
 | ISO-007 | P0 | ✅ HAVE | AF_UNIX per-cave — week 12 (commit `05a1384b`) |
 | ISO-008 | P1 | ❌ MISSING | AF_UNIX SOCK_DGRAM not implemented |
-| ISO-009 | P1 | ⚠️ PARTIAL | `audit::recent_for_cave(cave_id_filter, buf)` API landed (SP-ISO-009). Filters audit entries by recorded `cave_id`. Existing `audit::recent` retained as kernel-privileged path. SP-ISO-009.1 follow-up wires a `recent_for_caller` wrapper that consults the active cave's capability set + the security app to use that wrapper. |
+| ISO-009 | P1 | ✅ HAVE | `audit::recent_for_cave(cave_id_filter, buf)` API (SP-ISO-009) + **cap-aware wrapper** `audit::recent_for_caller(buf)` (SP-ISO-009.1, 2026-05-16) consulting active cave's capability set. Caves WITH `audit:read-all` cap get full ring; without cap get only own-cave entries. Kernel context (no active cave) gets full ring. `src/ui/apps/security.rs:157` swept to use the wrapper. |
 
 ## §5. Attestation as Kernel Primitive (ATT) — entire section MISSING
 
@@ -119,7 +119,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | AUD-003 | P0 | ✅ HAVE | All NIAP FAU_GEN.1 categories present: 19 categories incl. `AuthSession`, `PrivEsc`, `LoadableMod`, `UpdateApply`, `FileAccess`, `Attest` (SP-AUD-003 added 6 to the existing 13). Display labels in `security.rs` extended. Restore-side serializer mapping extended. Use-site instrumentation (which subsystems emit each new category) is SP-AUD-003.1 follow-up. |
 | AUD-004 | P0 | ✅ HAVE | `tools/audit-verifier/audit_verifier.py` (SP-AUD-004) — standalone Python offline verifier with **two complete modes** now: (1) **text mode** parses `/audit.log` (audit-flush) — structural + monotonicity + per-category summary; (2) **binary mode** parses `/audit.bin` (audit-flush-binary; SP-AUD-004.1) — full HMAC-SHA-384 chain recomputation when paired with `--key-hex` (48-byte SHA-384 key per SP-C4.1) + optional seal verification via `--seal-hex` (56-byte seal). End-to-end tested with synthetic binary log. Operator-side: `audit-flush-binary` shell command writes `/audit.bin` per `SPHRAGIS_AUDIT_BINARY_V1` format. SP-AUD-004.2 adds the TPI-quorum key-release flow for production-grade key delivery to the verifier. |
 | AUD-005 | P1 | ⚠️ PARTIAL | `ui/sigma_bitmap.rs` exists (589 LoC); not formalized as anomaly detector with thresholds |
-| AUD-006 | P0 | ⚠️ PARTIAL | Same primitive as ISO-009; `recent_for_cave` available. Closure to ✅ requires the SP-ISO-009.1 cap-set wiring at the read callers. |
+| AUD-006 | P0 | ✅ HAVE | Same primitive as ISO-009; cap-aware wrapper `recent_for_caller` (SP-ISO-009.1) + `audit:read-all` capability gates the privileged view. Security app callsite swept. |
 
 ## §7. Build Chain / Provenance (BLD)
 
