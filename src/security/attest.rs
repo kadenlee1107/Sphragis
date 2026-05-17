@@ -450,6 +450,56 @@ fn quote_for_cave_inner(
     })
 }
 
+/// SP-ATT-001 (2026-05-16) wire format magic for `Quote::to_wire`.
+/// Bumped to V2 when CBOR/RATS lands (SP-C1.7).
+pub const QUOTE_WIRE_MAGIC: &[u8; 8] = b"SPHATTV1";
+
+impl Quote {
+    /// Serialize a Quote to a flat byte stream the external verifier
+    /// (`tools/attest-verifier/`) can parse. Layout:
+    ///
+    /// ```text
+    /// magic           (8)    b"SPHATTV1"
+    /// kernel_meas     (48)
+    /// cave_meas       (48)
+    /// nonce           (32)
+    /// cave_name_len   (2 BE)
+    /// cave_name       (cave_name_len)
+    /// claims_len      (4 BE)
+    /// claims          (claims_len)
+    /// vk_len          (4 BE)
+    /// verifying_key   (vk_len)
+    /// sig_len         (4 BE)
+    /// signature       (sig_len)
+    /// ```
+    ///
+    /// SP-C1.7 (future) replaces this with CBOR per the RATS conceptual
+    /// messages. This binary form is intentionally minimal so a verifier
+    /// without a CBOR library can still parse it.
+    pub fn to_wire(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(
+            8 + KERNEL_MEASUREMENT_LEN + CAVE_MEASUREMENT_LEN + NONCE_LEN
+            + 2 + self.cave_identity.name.len()
+            + 4 + self.claims.bytes.len()
+            + 4 + self.verifying_key.len()
+            + 4 + self.signature.len(),
+        );
+        out.extend_from_slice(QUOTE_WIRE_MAGIC);
+        out.extend_from_slice(&self.kernel_measurement.0);
+        out.extend_from_slice(&self.cave_identity.measurement);
+        out.extend_from_slice(&self.nonce);
+        out.extend_from_slice(&(self.cave_identity.name.len() as u16).to_be_bytes());
+        out.extend_from_slice(&self.cave_identity.name);
+        out.extend_from_slice(&(self.claims.bytes.len() as u32).to_be_bytes());
+        out.extend_from_slice(&self.claims.bytes);
+        out.extend_from_slice(&(self.verifying_key.len() as u32).to_be_bytes());
+        out.extend_from_slice(&self.verifying_key);
+        out.extend_from_slice(&(self.signature.len() as u32).to_be_bytes());
+        out.extend_from_slice(&self.signature);
+        out
+    }
+}
+
 /// Public API: produce a signed Quote attesting to:
 ///   - The current kernel measurement
 ///   - The currently-active cave's identity (per `cave::get_active`)
