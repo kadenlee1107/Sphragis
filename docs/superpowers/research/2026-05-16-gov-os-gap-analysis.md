@@ -14,12 +14,12 @@
 
 | Status | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| ✅ HAVE | **17** | 2 | 0 | **19** |
-| ⚠️ PARTIAL | **45** | 5 | 0 | **50** |
-| ❌ MISSING | **13** | 26 | 6 | **45** |
+| ✅ HAVE | **26** | 3 | 0 | **29** |
+| ⚠️ PARTIAL | **36** | 6 | 1 | **43** |
+| ❌ MISSING | **13** | 24 | 5 | **42** |
 | **Total** | 75 | 33 | 6 | **114** |
 
-**Headline (updated 2026-05-16 absolute autonomous-run-end):** 17% of requirements fully satisfied; 39% partially in place; 39% missing — **down from 75% MISSING this morning**. **P0 fully-satisfied count: 5 → 17** (12 P0s closed across the autonomous run); **P0 partial count: 17 → 45** (28 additional P0s landed scaffolding, design, or partial implementation). **The autonomous run advanced 40 P0 requirements out of MISSING state.** Remaining 13 P0 MISSING items are ALL in the 3 disjoint buckets the autonomous-decision rules cannot advance:
+**Headline (updated 2026-05-16 end of run 2, start of run 3):** 25% of requirements fully satisfied; 38% partially in place; 37% missing — **down from 75% MISSING this morning**. **P0 fully-satisfied count: 5 → 26** (21 P0s closed across runs 1+2); **P0 partial count: 17 → 36** (after additional 9 advances P0 PARTIAL → HAVE in run 2 depth pass). **Cumulative: 45 P0 requirements advanced out of MISSING state since this morning** (run 1 breadth + run 2 depth). Remaining 13 P0 MISSING items are ALL in the 3 disjoint buckets the autonomous-decision rules cannot advance:
 
 1. **Founder filing + paperwork (8)**: PRC-001..007 (incorporate Delaware C-Corp; SAM.gov + CAGE + UEI; GSA MAS offer; ACT 3 teaming agreement; IWRP/C5 consortium membership; SBIR Phase I submissions to DoD SBIR / AFWERX / DARPA SBIR; DARPA Forecast-to-Industry pitches), CRT-007 BIS encryption-classification filing. Each requires founder action — filing forms, registering entities, sending emails to gov bodies.
 
