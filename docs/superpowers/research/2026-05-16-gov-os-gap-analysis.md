@@ -156,12 +156,12 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| UX-001 | P0 | ❌ MISSING | Single-app-at-a-time today; need WM + concurrent apps |
-| UX-002 | P0 | ❌ MISSING | No installer / ISO |
-| UX-003 | P0 | ❌ MISSING | No unified settings app (caves_mgr partially covers cave management) |
-| UX-004 | P0 | ❌ MISSING | Single passphrase lock screen only |
-| UX-005 | P1 | ❌ MISSING | No package manager |
-| UX-006 | P1 | ❌ MISSING | No POSIX userspace toolbox |
+| UX-001 | P0 | ⚠️ PARTIAL | `DESIGN_PRODUCTIZATION_UX.md` §1 published — tiling WM (Sway/i3 model); compositor + WM architecture; keybindings; status bar; 4-step IMPL phasing (A minimal viable, B multi-monitor, C configurable keys, D status-bar). |
+| UX-002 | P0 | ⚠️ PARTIAL | `DESIGN_PRODUCTIZATION_UX.md` §2 published — UEFI ISO for x86_64 (SP-HW-002-gated) + m1n1-chainload bundle for M4 (today path); first-boot flow (lang, hw-probe, operator-CA selection, passphrase, initial cave, audit-seal); 3-step IMPL phasing. |
+| UX-003 | P0 | ⚠️ PARTIAL | `DESIGN_PRODUCTIZATION_UX.md` §3 published — 8 sections (networking, audit review, cave mgmt, attestation status, updates, user accounts, crypto status, time/locale); 3-step IMPL phasing (read-only → non-privileged read-write → privileged TPI-gated). |
+| UX-004 | P0 | ⚠️ PARTIAL | `DESIGN_PRODUCTIZATION_UX.md` §4 published — per-user identity model (uuid + username + Argon2id passphrase + optional FIDO2 + capabilities); 5 roles (Operator, CryptoOfficer, AuditOfficer, CaveAdmin, User); BatFS storage; 4-step IMPL phasing. |
+| UX-005 | P1 | ⚠️ PARTIAL | `DESIGN_PRODUCTIZATION_UX.md` §5 published — TUF over HTTPS with CNSA-2.0 ciphers; package tarball format with LMS-signed manifest; sphragis-blessed repo + 3-step IMPL phasing. |
+| UX-006 | P1 | ⚠️ PARTIAL | `DESIGN_PRODUCTIZATION_UX.md` §6 published — minimum-viable toolset (vim, git, python3, ssh, tmux, curl, jq, busybox, make, bash); distribution via UX-005; Linux ABI shim extension with bounded-expansion discipline; 3-step IMPL phasing. |
 | UX-007 | P1 | ⚠️ PARTIAL | `drivers/apple/dcp.rs` exists for display; no WM-side multi-monitor support |
 | UX-008 | P2 | ⚠️ PARTIAL | `drivers/apple/bcm_wifi.rs` exists; no networking-config UX |
 | UX-009 | P1 | ⚠️ PARTIAL | `ui/apps/...` has a security app; needs audit-filter UI |
