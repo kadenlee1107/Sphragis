@@ -1534,6 +1534,29 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
             &buf[..p],
         );
 
+        // SP-ATT-005 closure (2026-05-16): auto-register the new cave's
+        // attestable identity at create time. Measurement is SHA-384
+        // over (cave_id_be || name_bytes) — a structural fingerprint
+        // proving "I am cave N named X." Future SP-ATT-005.1 extends
+        // to a real code+config measurement once external-binary cave
+        // loading lands (today's caves are kernel-side apps with no
+        // separate binary).
+        {
+            use sha2::{Sha384, Digest};
+            let mut h = Sha384::new();
+            h.update(&(slot as u16).to_be_bytes());
+            h.update(name.as_bytes());
+            let digest = h.finalize();
+            let mut meas = [0u8; 48];
+            meas.copy_from_slice(&digest);
+            // Ignore the Result — register_cave_identity only fails
+            // on out-of-range cave_id or oversized name, both
+            // already checked above.
+            let _ = crate::security::attest::register_cave_identity(
+                slot, name.as_bytes(), meas,
+            );
+        }
+
         // write the cave manifest to BatFS so the registry
         // entry survives reboot. No-op for Ephemeral caves. Native /
         // Docker caves both go through this — `create_docker` re-saves
@@ -2051,6 +2074,10 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     // just set state=Free above).
     if let Some(id) = cave_id_for_reset {
         crate::caves::linux::quotas::reset(id);
+        // SP-ATT-005 closure (2026-05-16): unregister attestable
+        // identity so the destroyed cave can't continue producing
+        // valid Quotes via a stale registry entry.
+        crate::security::attest::unregister_cave_identity(id);
     }
 
     // success-path
