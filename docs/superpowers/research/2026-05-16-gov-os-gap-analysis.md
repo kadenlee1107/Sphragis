@@ -96,7 +96,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | ATT-003 | P0 | ❌ MISSING | No SEP attestation flow |
 | ATT-004 | P1 | ❌ MISSING | No TPM 2.0 integration |
 | ATT-005 | P0 | ⚠️ PARTIAL | `CaveIdentity` type + per-cave registry landed (SP-C1.3). `[StoredCaveIdentity; MAX_CAVES]` static array; `register_cave_identity(cave_id, name, meas)` / `unregister_cave_identity` / `cave_identity(cave_id)` API. `quote()` resolves the active cave via `cave::get_active()`; `quote_for_cave(cave_id, ...)` allows explicit-cave attestation. Still TODO: the `caves::cave::create` path needs to call `register_cave_identity` at cave-create time (currently caller-driven). |
-| ATT-006 | P0 | ❌ MISSING | No HSM-backed operator CA pattern |
+| ATT-006 | P0 | ⚠️ PARTIAL | `DESIGN_HSM_OPERATOR_CA.md` published (SP-C1.6). Four-actor model (operator-CA, device, HSM, verifier); provisioning flow; PKCS#11 v3.1 / KMIP 2.x interface; approved-measurement registry (Approach A strict + B registry); threat-model coverage. SP-C1.6.IMPL adds Sphragis-side endorsement loader + Quote field + operator-CA Python tool + external verifier. |
 | ATT-007 | P1 | ❌ MISSING | No RATS protocol implementation |
 | ATT-008 | P2 | ❌ MISSING | No CVM attestation |
 
@@ -124,7 +124,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | BLD-005 | P0 | ❌ MISSING | No sigstore cosign signing; no Rekor entries |
 | BLD-006 | P1 | ❌ MISSING | No documented bootstrap seed |
 | BLD-007 | P0 | ✅ HAVE | `.github/workflows/license-check.yml` runs both `cargo-deny check` and `cargo-audit --ignore RUSTSEC-2023-0071` on every push + PR. `deny.toml` enforces the license/advisory policy with the gov-grade allowlist. CI gate is live (verified via past PR runs). |
-| BLD-008 | P0 | ❌ MISSING | No LMS-signed kernel image; m1n1 chain does not verify Sphragis signature today |
+| BLD-008 | P0 | ⚠️ PARTIAL | `DESIGN_LMS_KERNEL_SIGNING.md` published (SP-BLD-008). Release-time signing flow (offline host + state-tracked LMS keystore); boot-time verification flow (bootloader pin + 5ms verify on M4); two-hash distinction (boot-verify SHA-256 vs attest SHA-384); bootloader trust roots per platform (m1n1 / GRUB / shim / CHERIoT). SP-BLD-008.IMPL adds operator-side `tools/lms-signer/` + m1n1 verification routine + release pipeline integration. |
 
 ## §8. Formal Verification (VER) — entire section MISSING
 
