@@ -14,12 +14,12 @@
 
 | Status | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| ✅ HAVE | 14 | 2 | 0 | **16** |
-| ⚠️ PARTIAL | 29 | 5 | 0 | **34** |
-| ❌ MISSING | 32 | 26 | 6 | **64** |
+| ✅ HAVE | 15 | 2 | 0 | **17** |
+| ⚠️ PARTIAL | 30 | 5 | 0 | **35** |
+| ❌ MISSING | 30 | 26 | 6 | **62** |
 | **Total** | 75 | 33 | 6 | **114** |
 
-**Headline (updated 2026-05-16 late evening):** 14% of requirements fully satisfied; 30% partially in place; 56% missing. **P0 fully-satisfied count grew 5 → 14** (audit-week-14 + the 2026-05-16 autonomous run closed 9 P0s); **P0 partial count grew 17 → 29** (an additional 12 P0s landed scaffolding or partial implementation).
+**Headline (updated 2026-05-16 late evening):** 15% of requirements fully satisfied; 31% partially in place; 54% missing. **P0 fully-satisfied count grew 5 → 15** (the 2026-05-16 autonomous run + cleanup closed 10 P0s); **P0 partial count grew 17 → 30** (an additional 13 P0s landed scaffolding or partial implementation). Remaining P0 ❌ MISSING items split into: 7 founder-required (PRC-001..007), 3 hardware-required (ATT-002 Caliptra, ATT-003 SEP, HW-002 x86_64), 11 multi-session engineering (ATT-006 HSM, AUD-002/004, BLD-001/005/008, UX-001..004, VER-002), 3 external-engagement certs (CRT-001/004/005), 6 large documentation (DOC-001/004/005/006/009 + one founder-doc).
 
 **This is the expected shape.** The last 14 weeks have been *kernel security hardening*, not *productization*. The HAVE column reflects audit-closed isolation primitives. The MISSING column reflects the entire productization mountain (UX, installer, multi-hardware), the procurement on-ramp (incorporation, SAM.gov, SBIR, DARPA), and the certification engineering work (FIPS, STIG, CSfC, attestation).
 
@@ -225,10 +225,10 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | REQ | P | Status | Notes |
 |---|---|---|---|
 | ANTI-001 | P0 | ⚠️ PARTIAL | No full-kernel proof attempted (good); not explicitly documented as non-goal |
-| ANTI-002 | P0 | ❌ MISSING | AGENT app present in tree (`src/ai/`, 5327 LoC) — drop is REQ-STRAT-003 |
+| ANTI-002 | P0 | ✅ HAVE | AGENT app dropped via SP-A2 (commit `be438386`, −5,945 LoC). `src/ai/` removed entirely; `src/ui/apps/agent.rs` removed; `DESIGN_AI_AGENT.md` carries historical-removal banner. Both `sphragis-community` and `sphragis-gov` builds are AI-free. |
 | ANTI-003 | P0 | ⚠️ PARTIAL | No QKD code today (good); not explicitly documented as non-goal |
 | ANTI-004 | P0 | ⚠️ PARTIAL | Linux ABI shim is narrow; not explicitly documented "no binary-compat promise" |
-| ANTI-005 | P0 | ❌ MISSING | No policy layer rejecting weak algorithms in gov build |
+| ANTI-005 | P0 | ⚠️ PARTIAL | Policy gate landed via `src/crypto/policy.rs` (SP-B1.6) — gov-strict rejects AES-128 / SHA-1 / SHA-256-for-sig / RSA / ECDSA / Ed25519-for-new-signing / ML-KEM-768 / ML-DSA-65 / plain ChaCha20-Poly1305 / HMAC-SHA-256 at the API gate. Compile-time const-eval assertions enforce the matrix. **Call-site sweep (route every cipher-suite negotiation through `policy::ensure_permitted`) is SP-B1.6.1 follow-up** — until that lands, callers that bypass the gate (e.g., direct invocations of weak primitives) aren't blocked by gov-strict. |
 | ANTI-006 | P0 | ⚠️ PARTIAL | All Sphragis code is open; not documented as explicit non-goal |
 | ANTI-007 | P0 | ⚠️ PARTIAL | Project avoids GPL/AGPL deps; **own license is AGPL** — paradoxical until LIC-001 closes |
 
