@@ -85,7 +85,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | ISO-006 | P1 | ✅ HAVE | `set_active` is `pub(crate)` — week 13 (commit `9249c4ff`) |
 | ISO-007 | P0 | ✅ HAVE | AF_UNIX per-cave — week 12 (commit `05a1384b`) |
 | ISO-008 | P1 | ❌ MISSING | AF_UNIX SOCK_DGRAM not implemented |
-| ISO-009 | P1 | ❌ MISSING | Audit-ring access not cave-scoped |
+| ISO-009 | P1 | ⚠️ PARTIAL | `audit::recent_for_cave(cave_id_filter, buf)` API landed (SP-ISO-009). Filters audit entries by recorded `cave_id`. Existing `audit::recent` retained as kernel-privileged path. SP-ISO-009.1 follow-up wires a `recent_for_caller` wrapper that consults the active cave's capability set + the security app to use that wrapper. |
 
 ## §5. Attestation as Kernel Primitive (ATT) — entire section MISSING
 
@@ -111,7 +111,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | AUD-003 | P0 | ⚠️ PARTIAL | Week 3-4 added Crypto / Net / Fs / KeyRotate / TpiOp categories; **add Authentication, PrivilegeEscalation, KernelModuleLoad, UpdateApply** to match NIAP FAU_GEN.1 |
 | AUD-004 | P0 | ❌ MISSING | No offline-verifier tool for the HMAC chain |
 | AUD-005 | P1 | ⚠️ PARTIAL | `ui/sigma_bitmap.rs` exists (589 LoC); not formalized as anomaly detector with thresholds |
-| AUD-006 | P0 | ❌ MISSING | Audit-ring access control not cave-scoped (duplicates ISO-009) |
+| AUD-006 | P0 | ⚠️ PARTIAL | Same primitive as ISO-009; `recent_for_cave` available. Closure to ✅ requires the SP-ISO-009.1 cap-set wiring at the read callers. |
 
 ## §7. Build Chain / Provenance (BLD)
 

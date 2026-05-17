@@ -179,6 +179,48 @@ pub fn recent(buf: &mut [Entry]) -> usize {
     take
 }
 
+/// Cave-scoped read (SP-ISO-009 / REQ-ISO-009 / REQ-AUD-006). Like
+/// `recent` but filters to entries whose recorded `cave_id` matches
+/// `cave_id_filter`. Use this when a non-privileged cave (one
+/// without the `audit:read-all` capability) requests the audit ring
+/// — it sees only entries from its own cave.
+///
+/// `cave_id_filter` semantics:
+///   - 0xFFFF: kernel-context entries only
+///   - 0..=0x7FFE: a specific cave's entries
+///
+/// Walks the same window as `recent` (last RING_CAP entries) but
+/// only copies those whose cave_id matches. Returns the count of
+/// MATCHING entries written into `buf`. Caller-side: a cave with
+/// `audit:read-all` should use `recent` directly; one without
+/// should call this with its own cave_id.
+///
+/// Privileged surface (callable by anything with mutable kernel
+/// access) — Rust visibility doesn't enforce the capability check;
+/// the caller's cave-policy gate is where that enforcement lives.
+/// SP-ISO-009.1 (future) wires a cave-policy check into a
+/// `recent_for_caller(buf)` wrapper that consults the active cave's
+/// capability set.
+pub fn recent_for_cave(cave_id_filter: u16, buf: &mut [Entry]) -> usize {
+    let head = HEAD.load(Ordering::Relaxed);
+    if head == 0 || buf.is_empty() {
+        return 0;
+    }
+    let resident = if head < RING_CAP { head } else { RING_CAP };
+    let start = head - resident;
+    let mut written = 0usize;
+    for i in 0..resident {
+        if written >= buf.len() { break; }
+        let slot = (start + i) % RING_CAP;
+        let entry = unsafe { (*core::ptr::addr_of!(RING))[slot] };
+        if entry.cave_id == cave_id_filter {
+            buf[written] = entry;
+            written += 1;
+        }
+    }
+    written
+}
+
 /// the ring silently overwrites the oldest
 /// entries when full. An adversary who suspects a forensic dump is
 /// imminent can flood the log to evict their tracks. This counter
