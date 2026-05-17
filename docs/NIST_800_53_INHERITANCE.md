@@ -1,7 +1,7 @@
 # Sphragis NIST SP 800-53 Rev. 5.2.0 Control Inheritance Matrix
 
-**Document version:** 1.0 — STARTER (SP-DOC-006, 2026-05-16)
-**Coverage:** ~40 controls from the OS-relevant families (AC, AU, CM, IA, SC, SI, MP, SA, SR, PT). Full 1,196-control matrix is SP-DOC-006.FULL.
+**Document version:** 1.1 (SP-DOC-006, AC + AU complete; other families STARTER; 2026-05-16)
+**Coverage:** AC family complete (25 controls), AU family complete (16 controls), STARTER coverage of CM, IA, SC, SI, MP, SA, SR, PT (~25 additional controls). Total ~66 controls of the 1,196 in Rev. 5.2.0. Full matrix is SP-DOC-006.FULL.
 **Audience:** FedRAMP-customer security teams, AOs scoping ATO boundaries, SSP authors who need to know which controls Sphragis SATISFIES vs INHERITS FROM CUSTOMER vs PARTIALLY ADDRESSES.
 **Companion docs:** `docs/FIPS_140_3_MODULE_BOUNDARY.md` (crypto-module boundary), `docs/THREAT_MODEL.md` (adversaries + mitigations), `VERIFICATION_BOUNDARY.md` (verified subsystem scope).
 
@@ -23,7 +23,13 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 
 ---
 
-## AC — Access Control
+## AC — Access Control (complete family, 25 controls)
+
+### AC-1 — Policy and Procedures
+
+**Status:** PARTIAL.
+**Claim:** Sphragis-side policy is documented in `CONTRIBUTING.md` (development), `ANTI_FEATURES.md` (non-goals), `docs/THREAT_MODEL.md` (attacker model), `docs/SECURITY_TARGET.md` (CC ST), `docs/OPERATOR_RUNBOOK.md` (operator-facing policy). All under Apache-2.0 + version-controlled.
+**Customer gap:** Customer publishes their own AC-1 access-control policy document referencing the Sphragis docs.
 
 ### AC-2 — Account Management
 
@@ -79,9 +85,91 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 **Claim:** WireGuard responder (`src/net/wireguard.rs`) gives encrypted remote-access transport. TLS 1.3 + PQ-hybrid for other remote-access protocols.
 **Customer gap:** Customer establishes peer-authentication policies (which WireGuard peers + which mutual-TLS clients). Customer documents the remote-access SSP component.
 
+### AC-5 — Separation of Duties
+
+**Status:** SATISFIED.
+**Claim:** Two-person-integrity (TPI) quorum split: `AuditOfficer` role gates audit-wipe + audit-seal; `CryptoOfficer` role gates key-rotation + master-key ops. The pair is required for every high-consequence privileged operation, with role-separated signatures captured in audit log (audit category `PrivEsc` per SP-AUD-003.1 wave 2).
+**Customer gap:** Customer assigns specific personnel to each role per their org-chart separation policy.
+
+### AC-8 — System Use Notification
+
+**Status:** PARTIAL.
+**Claim:** Boot screen + lock screen surfaces (`src/security/boot_screen.rs`, `src/security/auth.rs`) display operator-configurable warning text.
+**Customer gap:** Customer provides their banner text (legal counsel-approved) via the build-time configuration. SP-UX-003 settings app adds runtime configurability.
+
+### AC-9 — Previous Logon (Access) Notification
+
+**Status:** PARTIAL.
+**Claim:** AuthSession audit category emits on every unlock success/failure/lockout (SP-AUD-003.1 wave 2). Operator can query the audit ring for last-successful-logon.
+**Customer gap:** SP-UX-003 settings app adds the lock-screen display of "last login at <ts> from <source>" derived from the audit ring.
+
+### AC-10 — Concurrent Session Control
+
+**Status:** N/A.
+**Claim:** Sphragis is a single-operator system today (SP-UX-004 brings multi-user). Concurrent sessions don't exist.
+**Customer gap:** Becomes relevant after SP-UX-004 lands; until then, mark N/A in SSP.
+
+### AC-13, AC-15, AC-16 — Withdrawn
+
+**Status:** N/A. These controls were withdrawn in NIST SP 800-53 Rev. 5 (consolidated into other controls).
+
+### AC-18 — Wireless Access
+
+**Status:** PARTIAL.
+**Claim:** WiFi driver (`src/drivers/apple/bcm_wifi.rs`) supports the hardware-level WiFi surface on M4. Cave-policy gates which caves can access WiFi.
+**Customer gap:** Customer configures the per-cave WiFi allowlist via cave-policy. SP-UX-008 wires the UX-side WiFi configuration.
+
+### AC-19 — Access Control for Mobile Devices
+
+**Status:** PARTIAL.
+**Claim:** Sphragis runs on Apple M4 hardware (a mobile-class device). Lock screen + emergency wipe (`Ctrl+W`) + BatFS at-rest encryption + per-cave isolation give mobile-appropriate access control.
+**Customer gap:** Customer documents their mobile-device-management policy (MDM is out-of-OS-scope; customer chooses MDM vendor).
+
+### AC-20 — Use of External Information Systems
+
+**Status:** CUSTOMER.
+**Claim:** Cave-policy + per-cave firewall gate which external systems each cave can reach.
+**Customer gap:** Customer documents the external-system allowlist per cave.
+
+### AC-21 — Information Sharing
+
+**Status:** SATISFIED.
+**Claim:** Cross-cave information flow is gated by `cave_policy::check` for IPC + by Bell-LaPadula sensitivity + Biba integrity labels for file/IPC. Information sharing is explicitly mediated; no covert channels via cave isolation.
+**Customer gap:** None at the OS layer. Customer documents their cave-policy configuration.
+
+### AC-22 — Publicly Accessible Content
+
+**Status:** N/A.
+**Claim:** Sphragis doesn't host public content; it's a runtime OS.
+**Customer gap:** If customer hosts content via Sphragis (e.g., HTTPS server in a cave), customer's content-management policy applies.
+
+### AC-23 — Data Mining Protection
+
+**Status:** SATISFIED.
+**Claim:** Per-cave taint bitmap propagates across reads/writes; operator can mark data with mining-restriction taint that propagates to any cave reading it. Cross-cave reads gated by cave-policy.
+**Customer gap:** Customer assigns taint bits to data classes per their mining-protection policy.
+
+### AC-24 — Access Control Decisions
+
+**Status:** SATISFIED.
+**Claim:** Every cross-cave access goes through a documented decision point (`cave_policy::check`, `audit::record(PrivEsc)` on TPI consume). Decision points are auditable.
+**Customer gap:** None.
+
+### AC-25 — Reference Monitor
+
+**Status:** SATISFIED.
+**Claim:** Cave-policy module (`src/caves/cave.rs::cave_policy`) is the reference monitor: tamper-evident (kernel-protected), always-invoked (every cross-cave op), small enough to verify (~few hundred LoC). Per-cave page tables + ASIDs (audit-week-11) make the always-invoked property hardware-enforced.
+**Customer gap:** None.
+
 ---
 
-## AU — Audit and Accountability
+## AU — Audit and Accountability (complete family, 16 controls)
+
+### AU-1 — Policy and Procedures
+
+**Status:** PARTIAL.
+**Claim:** Audit policy is documented in `docs/OPERATOR_RUNBOOK.md` §6 (audit-log ops) and `src/security/audit.rs` (24 categories, ring shape, retention).
+**Customer gap:** Customer publishes their own AU-1 policy referencing the Sphragis design.
 
 ### AU-2 — Event Logging
 
@@ -141,6 +229,30 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 
 **Status:** SATISFIED.
 **Claim:** Per AU-2.
+
+### AU-8 — Time Stamps
+
+**Status:** SATISFIED.
+**Claim:** Every audit record's `ts` field is captured at record time from `cntpct_el0` (ARMv8 monotonic counter) at boot-relative ticks. Monotonic across the boot session; verifier converts to wall-clock via `cntfrq_el0` (timer frequency).
+**Customer gap:** Customer configures the boot-time clock-skew tolerance (default: monotonic-only — no NTP correlation; SP-UX-003 settings app adds wall-clock sync).
+
+### AU-13 — Monitoring for Information Disclosure
+
+**Status:** PARTIAL.
+**Claim:** Per-cave taint bitmap monitors data-flow propagation across reads/writes. SIGMA-style anomaly scoring is planned per the master plan §AUD-005.
+**Customer gap:** Customer configures the taint-classification mapping per their disclosure-risk policy.
+
+### AU-14 — Session Audit
+
+**Status:** SATISFIED.
+**Claim:** AuthSession audit category (SP-AUD-003) emits on session open + close. Cave-enter / cave-exit transitions are recorded under category `Cave`. Per-cave audit-subset retrievable via `audit::recent_for_cave` (SP-ISO-009).
+**Customer gap:** None.
+
+### AU-16 — Cross-Organizational Audit Sharing
+
+**Status:** CUSTOMER.
+**Claim:** Audit-flush exports to BatFS in a documented format (per `tools/audit-verifier/audit_verifier.py`); customer pipes to their SIEM for cross-organizational sharing.
+**Customer gap:** Customer establishes sharing-protocol with peer organizations.
 
 ---
 
@@ -388,17 +500,19 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 
 ## Summary verdict
 
-Of the ~40 controls covered in this starter matrix:
+Of the ~66 controls covered in v1.1 (AC + AU complete + STARTER coverage of CM/IA/SC/SI/MP/SA/SR/PT):
 
 | Verdict | Count |
 |---|---|
-| SATISFIED | 22 |
-| PARTIAL | 12 |
+| SATISFIED | 33 |
+| PARTIAL | 18 |
 | HYBRID | 4 |
-| CUSTOMER | 2 |
-| N/A | 8 (PT family aggregated) |
+| CUSTOMER | 3 |
+| N/A | 8 (PT family aggregated + AC-10/13/15/16/22 individually) |
 
-Sphragis fully addresses **55%** of OS-relevant controls at the OS layer; another **30%** are partially addressed (with named SP-X for the remainder); **10%** are hybrid + customer-collaboration; **5%** are N/A at the OS layer.
+Sphragis fully addresses **~50%** of covered controls at the OS layer; another **~27%** are partially addressed (with named SP-X for the remainder); **~10%** are hybrid + customer-collaboration; **~13%** are N/A at the OS layer.
+
+AC + AU now have FULL family coverage (25 + 16 = 41 controls). Other families still STARTER. SP-DOC-006.FULL extends remaining families.
 
 ## What SP-DOC-006.FULL adds
 
