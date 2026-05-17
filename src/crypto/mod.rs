@@ -50,6 +50,34 @@ pub fn run_self_tests() -> Result<(), &'static str> {
     // AES-128 + AES-256 GCM (NIST SP 800-38D) via existing selftest.
     gcm_verified::selftest()?;
 
+    // Fail-closed RNG smoke (AUDIT-FS-H3 / SP-B1.8): if the CPU
+    // exposes RNDR, verify the strict-mode fill_bytes succeeds and
+    // produces non-zero output. If RNDR is absent, verify the strict
+    // mode correctly returns Err rather than silently degrading.
+    // Either branch is a pass — what we're checking is that the
+    // strict API behaves per its contract, not that the platform has
+    // hardware entropy.
+    {
+        let mut probe = [0u8; 32];
+        match rng::fill_bytes_strict(&mut probe) {
+            Ok(()) => {
+                // Sanity: at least one nonzero byte (probability of
+                // 32 zero bytes from a working entropy source is
+                // ~2^-256; treat as a KAT failure).
+                let mut all_zero = true;
+                for b in probe.iter() { if *b != 0 { all_zero = false; break; } }
+                if all_zero { return Err("rng: strict fill emitted all-zeros"); }
+            }
+            Err(_) => {
+                // RNDR unavailable in this environment. Confirm the
+                // pre-flight check also reports Err for consistency.
+                if rng::require_hw_rng_or_err().is_ok() {
+                    return Err("rng: strict-mode Err but require_hw_rng_or_err Ok (inconsistent)");
+                }
+            }
+        }
+    }
+
     // ML-KEM-1024 (FIPS 203) round-trip KAT — CNSA 2.0 PQ-KEM at
     // category 5. Covers REQ-CRY-001. Generate → encapsulate →
     // decapsulate → shared secrets must match.

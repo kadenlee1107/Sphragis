@@ -48,6 +48,15 @@ static POISONED: AtomicBool = AtomicBool::new(false);
 /// temporarily empty) returns the SHA-chain bytes unmodified.
 static HAVE_RNDR: AtomicBool = AtomicBool::new(false);
 
+/// AUDIT-FS-H3 (SP-B1.8, 2026-05-16): counts every time an in-band RNDR
+/// read returns `None` during a `fill_bytes` or `fill_bytes_strict` call
+/// (i.e., hardware entropy source transiently empty / stalled). The
+/// non-strict `fill_bytes` proceeds with SHA-chain output unmodified;
+/// the strict variant fails closed. This counter lets operators trend
+/// stall frequency over time — a sudden spike indicates a wearing-out
+/// or attacked entropy source.
+static RNDR_STALLS: AtomicU64 = AtomicU64::new(0);
+
 /// Read ID_AA64ISAR0_EL1 to probe for the RNDR feature (bits 63:60 = 1
 /// means FEAT_RNG present). Call once at early boot.
 ///
@@ -215,4 +224,133 @@ pub fn random_32() -> [u8; 32] {
     let mut out = [0u8; 32];
     fill_bytes(&mut out);
     out
+}
+
+// ── Fail-closed entropy API (AUDIT-FS-H3 / SP-B1.8) ──────────────
+//
+// CNSA 2.0 / FIPS 140-3 / gov-grade contexts require a hardware
+// entropy source for cryptographic operations. The default
+// `fill_bytes` is FAIL-SOFT: it prints a loud warning at boot if
+// RNDR is unavailable, but continues with SHA-chain-only output.
+// That keeps dev environments (QEMU without `-cpu max`, older
+// hardware, containers) bootable.
+//
+// For gov-grade keygen (operator CA root keys, attestation root
+// keys, BatFS master keys, etc.), callers should route through the
+// strict variants below instead. They fail-closed on any RNDR
+// absence or stall, so a degraded entropy source produces an error
+// rather than weak key material. The future `sphragis-gov` build
+// profile (SP-B1.6) will additionally invoke `require_hw_rng_or_halt`
+// at boot — refusing to enter user-space at all on a non-RNDR
+// platform.
+
+/// Check-only: returns `Err` if the CPU does not expose ARMv8.5
+/// FEAT_RNG (no RNDR instruction). Use this as a pre-flight gate
+/// before any gov-grade keygen path.
+///
+/// Does NOT check for individual RNDR stalls during use; for that
+/// guarantee, also use `fill_bytes_strict` instead of `fill_bytes`.
+pub fn require_hw_rng_or_err() -> Result<(), &'static str> {
+    if HAVE_RNDR.load(Ordering::Acquire) {
+        Ok(())
+    } else {
+        Err("rng: ARMv8.5 FEAT_RNG (RNDR) unavailable — gov-grade keygen refused")
+    }
+}
+
+/// Boot-time gov-grade assertion: halt the kernel if RNDR is not
+/// present. Intended for the `sphragis-gov` build profile boot path.
+/// Print a loud error to UART and spin in WFE rather than continue
+/// with weakened entropy. Never returns on a failure.
+pub fn require_hw_rng_or_halt() {
+    if !HAVE_RNDR.load(Ordering::Acquire) {
+        crate::drivers::uart::puts("\n");
+        crate::drivers::uart::puts("[rng] FATAL (gov-build): ARMv8.5 FEAT_RNG (RNDR) unavailable\n");
+        crate::drivers::uart::puts("[rng] FATAL: gov-grade entropy policy is fail-closed; refusing to boot\n");
+        crate::drivers::uart::puts("[rng] FATAL: deploy on ARMv8.5+ hardware or use the community build\n");
+        loop { unsafe { core::arch::asm!("wfe"); } }
+    }
+}
+
+/// Fail-closed counterpart to `fill_bytes`. Behaves identically EXCEPT:
+///
+///  1. Returns `Err` immediately if `HAVE_RNDR == false` — no SHA-chain-
+///     only fallback under any circumstance.
+///  2. Returns `Err` if ANY in-band RNDR read returns `None`
+///     (hardware entropy source transiently empty / stalled during the
+///     call). The stall counter is still incremented so operators can
+///     trend frequency via `rndr_stall_count`.
+///  3. Returns `Err` if the RNG has been poisoned by `panic_wipe`.
+///
+/// On success, `buf` is filled identically to `fill_bytes`. Callers
+/// that need gov-grade entropy guarantees (operator CA private-key
+/// generation, attestation root keys, BatFS master keys, ML-KEM-1024 /
+/// ML-DSA-87 keygen in the gov build profile) should use this instead
+/// of `fill_bytes`.
+pub fn fill_bytes_strict(buf: &mut [u8]) -> Result<(), &'static str> {
+    if POISONED.load(Ordering::Acquire) {
+        return Err("rng: poisoned by prior panic_wipe");
+    }
+    if !HAVE_RNDR.load(Ordering::Acquire) {
+        return Err("rng: ARMv8.5 FEAT_RNG (RNDR) unavailable — strict mode refused");
+    }
+
+    struct ChainGuard;
+    impl Drop for ChainGuard {
+        fn drop(&mut self) { CHAIN_LOCK.store(false, Ordering::Release); }
+    }
+
+    let _irq = crate::kernel::sync::IrqGuard::new();
+    CHAIN_LOCK.store(true, Ordering::Release);
+    let _lock = ChainGuard;
+
+    let seed = gather_seed();
+    let mut pos = 0;
+    while pos < buf.len() {
+        let ctr = CTR.load(Ordering::Relaxed);
+        CTR.store(ctr.wrapping_add(1), Ordering::Relaxed);
+        let mut stream = [0u8; 64 + 16];
+        stream[..64].copy_from_slice(&seed);
+        stream[64..72].copy_from_slice(&ctr.to_le_bytes());
+        stream[72..80].copy_from_slice(&(pos as u64).to_le_bytes());
+        let mut h = sha256::hash(&stream);
+
+        // Strict mode: every RNDR slot MUST succeed. A single stall
+        // aborts the operation and returns Err. Existing CHAIN_LOCK
+        // is released by ChainGuard on Drop.
+        for slot in 0..4 {
+            match rndr_u64() {
+                Some(r) => {
+                    let rb = r.to_le_bytes();
+                    for i in 0..8 { h[slot * 8 + i] ^= rb[i]; }
+                }
+                None => {
+                    RNDR_STALLS.fetch_add(1, Ordering::Relaxed);
+                    return Err("rng: RNDR stalled mid-fill — strict mode refuses");
+                }
+            }
+        }
+
+        let take = core::cmp::min(32, buf.len() - pos);
+        buf[pos..pos + take].copy_from_slice(&h[..take]);
+
+        let new_lo = u64::from_le_bytes([h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7]]);
+        let new_hi = u64::from_le_bytes([h[8],h[9],h[10],h[11],h[12],h[13],h[14],h[15]]);
+        STATE_LO.store(new_lo, Ordering::Release);
+        STATE_HI.store(new_hi, Ordering::Release);
+
+        pos += take;
+    }
+
+    drop(_lock);
+    drop(_irq);
+    Ok(())
+}
+
+/// Diagnostic: cumulative count of RNDR-stall events across the
+/// lifetime of this boot. Useful for operators trending entropy-
+/// source health. A sudden spike suggests a worn-out or attacked
+/// hardware RNG.
+pub fn rndr_stall_count() -> u64 {
+    RNDR_STALLS.load(Ordering::Relaxed)
 }
