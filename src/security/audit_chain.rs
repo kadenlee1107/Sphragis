@@ -8,10 +8,19 @@
 //! Mechanism: maintain a parallel array of 32-byte hashes alongside
 //! the audit ring. When entry `i` is written, we compute
 //!
-//!     CHAIN[i % CAP] = sha256(CHAIN[(i-1) % CAP] || entry_canonical_bytes(i))
+//!     CHAIN[i % CAP] = HMAC-SHA-384(AUDIT_HMAC_KEY,
+//!                                   CHAIN[(i-1) % CAP] || entry_canonical_bytes(i))
 //!
-//! where `entry_canonical_bytes(i)` is `ts || cat || mlen || msg[..mlen]`
+//! where `entry_canonical_bytes(i)` is `ts || cat || mlen || cave_id || msg[..mlen]`
 //! — a deterministic byte serialization of the public fields.
+//!
+//! SP-C4.1 (2026-05-16): upgraded from HMAC-SHA-256 (32-byte chain
+//! + 40-byte ChainSeal) to HMAC-SHA-384 (48-byte chain + 56-byte
+//! ChainSeal) per CNSA 2.0 alignment. In-place swap — no dual-chain
+//! transition window since no production deployment has off-platform
+//! seal files in maintenance yet. Pre-SP-C4.1 on-disk seal files
+//! (40 bytes) are unverifiable under the new schema; operator
+//! should re-seal after upgrade.
 //!
 //! A verifier later walks the ring head -> tail, recomputes each
 //! hash from the previous, and aborts at the first mismatch. The
@@ -35,12 +44,17 @@
 
 use core::sync::atomic::Ordering;
 
-use crate::crypto::sha256;
+use crate::crypto::sha384;
 use crate::security::audit::{Entry, MSG_LEN, RING_CAP, HEAD};
+
+/// SP-C4.1 (2026-05-16): SHA-384 chain output size (was 32 for
+/// SHA-256). Public so callers (chain_head, ChainSeal) can refer to
+/// it without re-deriving.
+pub const CHAIN_HASH_LEN: usize = 48;
 
 /// Storage for the per-entry chain hashes. Index `i` mirrors the
 /// audit ring's slot `i`. Slot 0 chains from the all-zero genesis.
-static mut CHAIN: [[u8; 32]; RING_CAP] = [[0u8; 32]; RING_CAP];
+static mut CHAIN: [[u8; CHAIN_HASH_LEN]; RING_CAP] = [[0u8; CHAIN_HASH_LEN]; RING_CAP];
 
 /// AUDIT-CAVE-M1 (2026-05-15): kernel-only HMAC key for chaining.
 /// Seeded from RNDR at boot via `init_audit_key()`. Until that runs
@@ -49,7 +63,11 @@ static mut CHAIN: [[u8; 32]; RING_CAP] = [[0u8; 32]; RING_CAP];
 /// without knowing the key. Once SEP / a sealed storage primitive
 /// lands, this should be sourced from there so kernel-write alone
 /// is insufficient.
-static mut AUDIT_HMAC_KEY: [u8; 32] = [0u8; 32];
+///
+/// SP-C4.1: key length grew 32 -> 48 bytes alongside the HMAC
+/// upgrade SHA-256 -> SHA-384. HMAC accepts any key length but a
+/// key sized to the inner-hash output is conventional.
+static mut AUDIT_HMAC_KEY: [u8; CHAIN_HASH_LEN] = [0u8; CHAIN_HASH_LEN];
 static AUDIT_KEY_READY: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
@@ -72,7 +90,7 @@ pub fn init_audit_key() {
 /// AUDIT-CAVE-M3: cave_id (2 bytes big-endian) is part of the
 /// canonical form so the chain covers entry provenance — tampering
 /// with cave_id alone now breaks the chain.
-fn canonical_bytes(entry: &Entry, out: &mut [u8; 32 + MSG_LEN]) -> usize {
+fn canonical_bytes(entry: &Entry, out: &mut [u8; CHAIN_HASH_LEN + MSG_LEN]) -> usize {
     // 8 + 1 + 1 + 2 = 12 byte fixed prefix, then up to MSG_LEN body.
     let ts_be = entry.ts.to_be_bytes();
     out[..8].copy_from_slice(&ts_be);
@@ -99,25 +117,26 @@ fn canonical_bytes(entry: &Entry, out: &mut [u8; 32 + MSG_LEN]) -> usize {
 /// SAFETY: caller must hold the same exclusion the audit ring assumes
 /// (currently: single-writer in main thread).
 pub unsafe fn append_chain(slot: usize, entry: &Entry, head: usize) {
-    let mut canon = [0u8; 32 + MSG_LEN];
+    let mut canon = [0u8; CHAIN_HASH_LEN + MSG_LEN];
     let n = canonical_bytes(entry, &mut canon);
 
     let prev = if head == 0 {
-        [0u8; 32]
+        [0u8; CHAIN_HASH_LEN]
     } else {
         let prev_slot = (head - 1) % RING_CAP;
         unsafe { CHAIN[prev_slot] }
     };
 
-    let mut buf = [0u8; 32 + 32 + MSG_LEN];
-    buf[..32].copy_from_slice(&prev);
-    buf[32..32 + n].copy_from_slice(&canon[..n]);
-    // AUDIT-CAVE-M1: HMAC-SHA256 the chain link with the kernel-only
-    // audit key. Plain SHA-256 was forgeable by anyone with kernel
-    // write — they could roll the chain forward to match arbitrary
-    // post-tamper state. With HMAC, forgery requires knowing the key.
+    let mut buf = [0u8; CHAIN_HASH_LEN + CHAIN_HASH_LEN + MSG_LEN];
+    buf[..CHAIN_HASH_LEN].copy_from_slice(&prev);
+    buf[CHAIN_HASH_LEN..CHAIN_HASH_LEN + n].copy_from_slice(&canon[..n]);
+    // SP-C4.1 (2026-05-16): HMAC-SHA-384 (was SHA-256). CNSA 2.0
+    // mandates SHA-384/512 for new signing/MAC use; the chain MAC
+    // counts as MAC use. Migration is in-place (no dual-chain
+    // transition window); pre-SP-C4.1 on-disk seals are
+    // unverifiable under the new schema.
     let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(AUDIT_HMAC_KEY)) };
-    let h = sha256::hmac(&key, &buf[..32 + n]);
+    let h = sha384::hmac(&key, &buf[..CHAIN_HASH_LEN + n]);
     let mut k = key;
     crate::security::zeroize::zeroize(&mut k);
     unsafe { CHAIN[slot] = h; }
@@ -131,7 +150,7 @@ pub fn reset_for_test() {
     unsafe {
         let ptr = core::ptr::addr_of_mut!(CHAIN);
         for i in 0..RING_CAP {
-            (*ptr)[i] = [0u8; 32];
+            (*ptr)[i] = [0u8; CHAIN_HASH_LEN];
         }
     }
 }
@@ -140,10 +159,10 @@ pub fn reset_for_test() {
 /// recorded entry. Operators should seal this externally on a
 /// regular cadence (every N entries, every M seconds, etc.) so
 /// tampering against the live ring becomes detectable.
-pub fn chain_head() -> [u8; 32] {
+pub fn chain_head() -> [u8; CHAIN_HASH_LEN] {
     let head = HEAD.load(Ordering::Relaxed);
     if head == 0 {
-        return [0u8; 32];
+        return [0u8; CHAIN_HASH_LEN];
     }
     let slot = (head - 1) % RING_CAP;
     unsafe { CHAIN[slot] }
@@ -161,23 +180,27 @@ pub fn chain_head() -> [u8; 32] {
 /// entries are missing.
 pub struct ChainSeal {
     pub count: usize,
-    pub hash:  [u8; 32],
+    pub hash:  [u8; CHAIN_HASH_LEN],
 }
 
+/// SP-C4.1: encoded seal length grew 40 -> 56 bytes (8B count + 48B
+/// hash) when chain HMAC upgraded SHA-256 -> SHA-384.
+pub const SEAL_ENCODED_LEN: usize = 8 + CHAIN_HASH_LEN;
+
 impl ChainSeal {
-    /// Encode as 8B big-endian count || 32B hash (40 bytes total).
-    pub fn encode(&self) -> [u8; 40] {
-        let mut out = [0u8; 40];
+    /// Encode as 8B big-endian count || 48B hash (56 bytes total).
+    pub fn encode(&self) -> [u8; SEAL_ENCODED_LEN] {
+        let mut out = [0u8; SEAL_ENCODED_LEN];
         out[..8].copy_from_slice(&(self.count as u64).to_be_bytes());
-        out[8..40].copy_from_slice(&self.hash);
+        out[8..SEAL_ENCODED_LEN].copy_from_slice(&self.hash);
         out
     }
 
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != 40 { return None; }
+        if bytes.len() != SEAL_ENCODED_LEN { return None; }
         let mut c = [0u8; 8];
         c.copy_from_slice(&bytes[..8]);
-        let mut h = [0u8; 32];
+        let mut h = [0u8; CHAIN_HASH_LEN];
         h.copy_from_slice(&bytes[8..]);
         Some(ChainSeal { count: u64::from_be_bytes(c) as usize, hash: h })
     }
@@ -222,14 +245,14 @@ pub fn verify_seal(seal: &ChainSeal) -> SealVerify {
     if seal.count == 0 {
         // Genesis seal: hash should equal the all-zero chain
         // (no entries recorded yet).
-        return if seal.hash == [0u8; 32] { SealVerify::Ok }
+        return if seal.hash == [0u8; CHAIN_HASH_LEN] { SealVerify::Ok }
                else { SealVerify::Mismatch };
     }
     // Recompute the chain from `ring_tail .. seal.count`. The
     // starting prev_hash is the stored chain at the slot just
     // before ring_tail (or zeros if ring_tail == 0).
     let mut prev = if ring_tail == 0 {
-        [0u8; 32]
+        [0u8; CHAIN_HASH_LEN]
     } else {
         let prev_slot = (ring_tail - 1) % RING_CAP;
         unsafe { CHAIN[prev_slot] }
@@ -237,14 +260,14 @@ pub fn verify_seal(seal: &ChainSeal) -> SealVerify {
     for i in ring_tail..seal.count {
         let slot = i % RING_CAP;
         let entry = unsafe { &crate::security::audit::raw_ring()[slot] };
-        let mut canon = [0u8; 32 + MSG_LEN];
+        let mut canon = [0u8; CHAIN_HASH_LEN + MSG_LEN];
         let n = canonical_bytes(entry, &mut canon);
-        let mut buf = [0u8; 32 + 32 + MSG_LEN];
-        buf[..32].copy_from_slice(&prev);
-        buf[32..32 + n].copy_from_slice(&canon[..n]);
-        // AUDIT-CAVE-M1: mirror the HMAC used in append_chain.
+        let mut buf = [0u8; CHAIN_HASH_LEN + CHAIN_HASH_LEN + MSG_LEN];
+        buf[..CHAIN_HASH_LEN].copy_from_slice(&prev);
+        buf[CHAIN_HASH_LEN..CHAIN_HASH_LEN + n].copy_from_slice(&canon[..n]);
+        // SP-C4.1: HMAC-SHA-384 (matches append_chain).
         let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(AUDIT_HMAC_KEY)) };
-        prev = sha256::hmac(&key, &buf[..32 + n]);
+        prev = sha384::hmac(&key, &buf[..CHAIN_HASH_LEN + n]);
         let mut k = key;
         crate::security::zeroize::zeroize(&mut k);
     }
@@ -298,7 +321,7 @@ pub fn verify_chain() -> VerifyOutcome {
     }
     let start = head.saturating_sub(RING_CAP);
     let mut prev_hash = if start == 0 {
-        [0u8; 32]
+        [0u8; CHAIN_HASH_LEN]
     } else {
         // We don't have the pre-eviction hash; assume the chain head
         // from the entry just before start is what the stored CHAIN
@@ -311,14 +334,14 @@ pub fn verify_chain() -> VerifyOutcome {
     for i in start..head {
         let slot = i % RING_CAP;
         let entry = unsafe { &crate::security::audit::raw_ring()[slot] };
-        let mut canon = [0u8; 32 + MSG_LEN];
+        let mut canon = [0u8; CHAIN_HASH_LEN + MSG_LEN];
         let n = canonical_bytes(entry, &mut canon);
-        let mut buf = [0u8; 32 + 32 + MSG_LEN];
-        buf[..32].copy_from_slice(&prev_hash);
-        buf[32..32 + n].copy_from_slice(&canon[..n]);
-        // AUDIT-CAVE-M1: mirror the HMAC used in append_chain.
+        let mut buf = [0u8; CHAIN_HASH_LEN + CHAIN_HASH_LEN + MSG_LEN];
+        buf[..CHAIN_HASH_LEN].copy_from_slice(&prev_hash);
+        buf[CHAIN_HASH_LEN..CHAIN_HASH_LEN + n].copy_from_slice(&canon[..n]);
+        // SP-C4.1: HMAC-SHA-384 (matches append_chain).
         let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(AUDIT_HMAC_KEY)) };
-        let expected = sha256::hmac(&key, &buf[..32 + n]);
+        let expected = sha384::hmac(&key, &buf[..CHAIN_HASH_LEN + n]);
         let mut k = key;
         crate::security::zeroize::zeroize(&mut k);
         let stored = unsafe { CHAIN[slot] };
