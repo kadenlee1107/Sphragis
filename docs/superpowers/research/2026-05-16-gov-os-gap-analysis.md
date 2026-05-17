@@ -111,7 +111,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | REQ | P | Status | Notes |
 |---|---|---|---|
 | AUD-001 | P0 | ⚠️ PARTIAL | HMAC-SHA-256 chain present (week 3-4); **upgrade to HMAC-SHA-384** per CNSA 2.0 |
-| AUD-002 | P0 | ❌ MISSING | WORM export to BatFS — audit FS-H7 deferred |
+| AUD-002 | P0 | ⚠️ PARTIAL | `DESIGN_AUDIT_WORM.md` published (SP-AUD-002). Segment-based architecture (256KiB sealed segments + HMAC-SHA-384 chain across segments + LATEST_SEAL.cbor operator-anchor). Per-segment format spec (header + records + trailer-with-hash). API surface (worm_append, worm_seal_current, worm_latest_seal, worm_verify). Threat coverage for 8 attack classes incl. truncation + rewind + power-loss. SP-AUD-002.IMPL adds src/security/audit_worm.rs (~400 LoC). Closes audit FS-H7 finding once IMPL lands. |
 | AUD-003 | P0 | ✅ HAVE | All NIAP FAU_GEN.1 categories present: 19 categories incl. `AuthSession`, `PrivEsc`, `LoadableMod`, `UpdateApply`, `FileAccess`, `Attest` (SP-AUD-003 added 6 to the existing 13). Display labels in `security.rs` extended. Restore-side serializer mapping extended. Use-site instrumentation (which subsystems emit each new category) is SP-AUD-003.1 follow-up. |
 | AUD-004 | P0 | ⚠️ PARTIAL | `tools/audit-verifier/audit_verifier.py` (SP-AUD-004) — standalone Python offline verifier. Structural mode (parse + monotonicity + per-category summary) is fully working today. Full HMAC chain recomputation awaits SP-AUD-004.1 (binary-format export from audit-flush) so the verifier has cave_id + mlen for the canonical-byte format. SP-AUD-004.2 adds TPI-quorum key-release flow for production use. |
 | AUD-005 | P1 | ⚠️ PARTIAL | `ui/sigma_bitmap.rs` exists (589 LoC); not formalized as anomaly detector with thresholds |
@@ -172,7 +172,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | REQ | P | Status | Notes |
 |---|---|---|---|
 | HW-001 | P0 | ✅ HAVE | M4 boot verified — photos `docs/photos/2026-04-17_first_m4_boot` |
-| HW-002 | P0 | ❌ MISSING | No x86_64 port |
+| HW-002 | P0 | ⚠️ PARTIAL | `DESIGN_X86_64_PORT.md` published (SP-HW-002). Target hardware (Intel NUC 13 Pro + Lenovo ThinkPad X1 Carbon Gen 11). 9 architectural decisions (UEFI+LMS boot, TPM 2.0 attestation root, PCID per-cave, SMEP+SMAP+UMIP+CET, Spectre v2 IBRS/STIBP/IBPB, driver layer per subsystem, BatFS on NVMe, CVM compatibility). Sphragis-side scope (which modules change). 6-step IMPL phasing (.A minimum viable boot, .B drivers, .C security primitives, .D TPM attestation, .E physical hardware bring-up, .F confidential VM). Closes REQ-HW-006 QEMU x86_64 CI in .A. |
 | HW-003 | P1 | ❌ MISSING | No ARM server target |
 | HW-004 | P1 | ❌ MISSING | No CHERIoT-Ibex target |
 | HW-005 | P0 | ✅ HAVE | QEMU virt aarch64 — primary CI target, ~80 self-tests |
