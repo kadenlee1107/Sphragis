@@ -14,12 +14,12 @@
 
 | Status | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| ✅ HAVE | 5 | 0 | 0 | **5** |
-| ⚠️ PARTIAL | 17 | 4 | 0 | **21** |
-| ❌ MISSING | 53 | 29 | 6 | **88** |
+| ✅ HAVE | 14 | 2 | 0 | **16** |
+| ⚠️ PARTIAL | 29 | 5 | 0 | **34** |
+| ❌ MISSING | 32 | 26 | 6 | **64** |
 | **Total** | 75 | 33 | 6 | **114** |
 
-**Headline:** 7% of requirements fully satisfied today; 18% partially in place; 75% missing.
+**Headline (updated 2026-05-16 late evening):** 14% of requirements fully satisfied; 30% partially in place; 56% missing. **P0 fully-satisfied count grew 5 → 14** (audit-week-14 + the 2026-05-16 autonomous run closed 9 P0s); **P0 partial count grew 17 → 29** (an additional 12 P0s landed scaffolding or partial implementation).
 
 **This is the expected shape.** The last 14 weeks have been *kernel security hardening*, not *productization*. The HAVE column reflects audit-closed isolation primitives. The MISSING column reflects the entire productization mountain (UX, installer, multi-hardware), the procurement on-ramp (incorporation, SAM.gov, SBIR, DARPA), and the certification engineering work (FIPS, STIG, CSfC, attestation).
 
@@ -43,8 +43,8 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| STRAT-001 | P0 | ❌ MISSING | Category claim not published anywhere |
-| STRAT-002 | P0 | ❌ MISSING | No 5-differentiator discipline doc/deck |
+| STRAT-001 | P0 | ⚠️ PARTIAL | Category claim ("sovereign-grade attested-cave OS for the post-quantum, capability-hardware era") landed in README.md "What Sphragis Is" section (SP-A1). Marketing-site publication is SP-A4 (founder-led). |
+| STRAT-002 | P0 | ⚠️ PARTIAL | 5 differentiators enumerated in README.md "What Sphragis Is" section (SP-A1). `ANTI_FEATURES.md` codifies the discipline anti-feature side. Per-differentiator artifact links in slide-deck form is SP-A4. |
 | STRAT-003 | P0 | ⚠️ PARTIAL | `gov-strict` feature flag landed (SP-B1.6) — defines the gov vs community split at the crypto policy layer. UX-side build split (AGENT-stripped binary) is the existing default (SP-A2 dropped AGENT entirely; both profiles share the same TCB). |
 | STRAT-004 | P1 | ❌ MISSING | Anti-features not formally documented (will be after this doc is committed) |
 
@@ -52,8 +52,8 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| LIC-001 | P0 | ❌ MISSING | `Cargo.toml: license = "AGPL-3.0-or-later"` — must change to `Apache-2.0` |
-| LIC-002 | P0 | ❌ MISSING | No CLA / DCO in repo |
+| LIC-001 | P0 | ✅ HAVE | `Cargo.toml: license = "Apache-2.0"` per SP-A1 (commit `5f3550bd`). `LICENSE` file holds canonical Apache-2.0 text + copyright. `NOTICE` file present. `LICENSE-COMMERCIAL.md` deleted. |
+| LIC-002 | P0 | ✅ HAVE | `CONTRIBUTING.md` documents DCO sign-off requirement (per SP-A1). Every Sphragis commit uses `git commit -s`. No CLA — DCO is the lighter alternative used by Linux kernel + most modern OSS infra. |
 | LIC-003 | P0 | ⚠️ PARTIAL | Project policy avoids GPL deps (per memory `feedback_license_posture.md`); no automated `cargo-deny` enforcement |
 | LIC-004 | P1 | ❌ MISSING | Trademark not filed |
 
@@ -123,7 +123,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | BLD-004 | P0 | ⚠️ PARTIAL | `scripts/gen_sbom.py` + `scripts/generate_sbom.py` exist; not in CI per-release |
 | BLD-005 | P0 | ❌ MISSING | No sigstore cosign signing; no Rekor entries |
 | BLD-006 | P1 | ❌ MISSING | No documented bootstrap seed |
-| BLD-007 | P0 | ❌ MISSING | `cargo-audit` + `cargo-deny` not in CI |
+| BLD-007 | P0 | ✅ HAVE | `.github/workflows/license-check.yml` runs both `cargo-deny check` and `cargo-audit --ignore RUSTSEC-2023-0071` on every push + PR. `deny.toml` enforces the license/advisory policy with the gov-grade allowlist. CI gate is live (verified via past PR runs). |
 | BLD-008 | P0 | ❌ MISSING | No LMS-signed kernel image; m1n1 chain does not verify Sphragis signature today |
 
 ## §8. Formal Verification (VER) — entire section MISSING
@@ -134,7 +134,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | VER-002 | P0 | ❌ MISSING | No IPC info-flow proof |
 | VER-003 | P1 | ❌ MISSING | No scheduler invariants formalized |
 | VER-004 | P1 | ❌ MISSING | No Kani model-check on pointer arithmetic |
-| VER-005 | P0 | ❌ MISSING | No verified-subsystem boundary documented |
+| VER-005 | P0 | ✅ HAVE | `VERIFICATION_BOUNDARY.md` published (SP-VER-005). Defines what's INSIDE/OUTSIDE the verified subsystem (capability dispatcher, syscall dispatch, IPC, crypto policy matrix) + names 4 specific properties (P1 cave non-interference, P2 source-EL discipline, P3 IPC non-interference, P4 crypto matrix consistency). Unblocks SP-VER-001/002/003 as the boundary they implement against. |
 | VER-006 | P2 | ❌ MISSING | Aspirational |
 
 **Second-biggest P0 gap.** Closing VER unlocks differentiator #1. Verus/Kani are real tooling in 2026; setting up the harness is well-bounded engineering work.
@@ -173,7 +173,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | HW-004 | P1 | ❌ MISSING | No CHERIoT-Ibex target |
 | HW-005 | P0 | ✅ HAVE | QEMU virt aarch64 — primary CI target, ~80 self-tests |
 | HW-006 | P1 | ❌ MISSING | No QEMU x86_64 CI |
-| HW-007 | P0 | ❌ MISSING | No HCL document |
+| HW-007 | P0 | ✅ HAVE | `docs/HARDWARE_COMPATIBILITY.md` published (SP-HW-007). Tier system (1/2/3), per-platform driver coverage, attestation-root, certification-status. Covers M4 (tier 2), QEMU virt aarch64 (tier 1 / CI), plus pursued (x86_64, ARM server, CHERIoT-Ibex) + explicitly-not-pursued. |
 
 ## §12. Documentation (DOC)
 
