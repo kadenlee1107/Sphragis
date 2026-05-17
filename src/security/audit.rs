@@ -478,6 +478,95 @@ pub fn flush_to_batfs() -> Result<usize, &'static str> {
     }
 }
 
+// ── SP-AUD-004.1 (2026-05-16): binary-format audit export ────────
+//
+// The text-format `serialize` above drops the cave_id + mlen fields
+// that the HMAC chain in audit_chain.rs covers. The offline verifier
+// (`tools/audit-verifier/audit_verifier.py`) cannot recompute the
+// chain bit-exact without them.
+//
+// SP-AUD-004.1 adds a binary-format export that preserves the full
+// canonical-byte format the HMAC chain consumed. With this, the
+// verifier's cryptographic mode (--key-hex) can reproduce every
+// chain link against the BatFS-exported log.
+//
+// Binary format:
+//   Header (40 bytes):
+//     magic     b"SPHRAGIS_AUDIT_BINARY_V1\n"  (24 bytes)
+//     count     big-endian u64                 (8 bytes)
+//     reserved  big-endian u64                 (8 bytes; must be 0)
+//   Records (variable, count entries):
+//     ts        big-endian u64                 (8 bytes)
+//     cat       u8                             (1 byte)
+//     mlen      u8                             (1 byte)
+//     cave_id   big-endian u16                 (2 bytes)
+//     msg       mlen bytes                     (variable)
+//   Total per record: 12 + mlen bytes
+
+/// Binary-format magic + version. Must match
+/// `tools/audit-verifier/audit_verifier.py` expectations.
+pub const BINARY_MAGIC: &[u8; 24] = b"SPHRAGIS_AUDIT_BINARY_V1";
+/// Header length: 24 magic + 8 count + 8 reserved = 40.
+pub const BINARY_HEADER_LEN: usize = 24 + 8 + 8;
+
+/// Serialize the whole resident ring (oldest-first) into `out` as
+/// binary-format records preceded by the header. Returns the number
+/// of bytes written. Used by `audit-flush --binary` /
+/// `flush_to_batfs_binary`.
+pub fn serialize_binary(out: &mut [u8]) -> usize {
+    if out.len() < BINARY_HEADER_LEN {
+        return 0;
+    }
+    let total = HEAD.load(Ordering::Relaxed);
+    let resident = if total < RING_CAP { total } else { RING_CAP };
+    // The magic includes a trailing newline + null per the README
+    // spec ("SPHRAGIS_AUDIT_BINARY_V1\n"); we use the 24-byte
+    // version-tag form here (no \n) since BINARY_MAGIC is 24 bytes
+    // ASCII. The Python verifier is updated to match.
+    out[..24].copy_from_slice(BINARY_MAGIC);
+    out[24..32].copy_from_slice(&(resident as u64).to_be_bytes());
+    out[32..40].copy_from_slice(&0u64.to_be_bytes());
+
+    let mut pos = BINARY_HEADER_LEN;
+    if total == 0 { return pos; }
+    let start = total - resident;
+    for i in 0..resident {
+        let idx = (start + i) % RING_CAP;
+        let e = unsafe { (*core::ptr::addr_of!(RING))[idx] };
+        let mlen = e.mlen as usize;
+        let needed = 12 + mlen;
+        if pos + needed > out.len() {
+            // Truncate at record boundary; record count in header
+            // already says how many records SHOULD be present, so
+            // verifier detects under-write.
+            break;
+        }
+        out[pos..pos + 8].copy_from_slice(&e.ts.to_be_bytes());
+        out[pos + 8] = e.cat;
+        out[pos + 9] = e.mlen;
+        out[pos + 10..pos + 12].copy_from_slice(&e.cave_id.to_be_bytes());
+        out[pos + 12..pos + 12 + mlen].copy_from_slice(&e.msg[..mlen]);
+        pos += needed;
+    }
+    pos
+}
+
+/// Flush the resident audit ring to BatFS as `/audit.bin` in the
+/// binary format. Companion to `flush_to_batfs` (text format);
+/// operator runs both for redundant exports — text is human-readable,
+/// binary is verifier-precise.
+pub fn flush_to_batfs_binary() -> Result<usize, &'static str> {
+    static mut BIN_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
+    unsafe {
+        let buf = &mut *core::ptr::addr_of_mut!(BIN_BUF);
+        let n = serialize_binary(buf);
+        if n <= BINARY_HEADER_LEN { return Ok(0); }
+        let _ = crate::fs::batfs::delete("audit.bin");
+        crate::fs::batfs::create("audit.bin", &buf[..n])?;
+        Ok(n)
+    }
+}
+
 /// restore previously-persisted audit entries from a
 /// `serialize`-format buffer (typically the contents of `/audit.log`
 /// in BatFS, written by a prior boot's `audit-flush`).

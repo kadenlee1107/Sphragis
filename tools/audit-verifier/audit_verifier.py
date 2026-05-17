@@ -147,7 +147,10 @@ def verify_monotonic_ts(entries: list[Entry]) -> list[tuple[int, str]]:
 def hmac_chain_verify_binary(records: list[tuple[int, int, int, bytes]], key: bytes,
                               seal_count: Optional[int] = None,
                               seal_hash: Optional[bytes] = None) -> tuple[bool, list[str]]:
-    """Recompute the HMAC-SHA-256 chain over BINARY records.
+    """Recompute the HMAC-SHA-384 chain over BINARY records (SP-C4.1
+    upgraded chain from SHA-256 to SHA-384 in-place; chain hash size
+    is now 48 bytes).
+
     `records` is a list of (ts, cat, cave_id, msg) tuples.
     Returns (is_valid, error_messages).
 
@@ -155,11 +158,11 @@ def hmac_chain_verify_binary(records: list[tuple[int, int, int, bytes]], key: by
       ts_be (8B) | cat (1B) | mlen (1B) | cave_id_be (2B) | msg[..mlen]
 
     Chain link:
-      CHAIN[i] = HMAC-SHA-256(key, prev_chain || canonical_bytes)
-      where prev_chain = [0u8; 32] for i == 0 else CHAIN[i-1]
+      CHAIN[i] = HMAC-SHA-384(key, prev_chain || canonical_bytes)
+      where prev_chain = [0u8; 48] for i == 0 else CHAIN[i-1]
     """
     errors: list[str] = []
-    prev = b"\x00" * 32
+    prev = b"\x00" * 48
     for i, (ts, cat, cave_id, msg) in enumerate(records):
         mlen = len(msg)
         if mlen > 192:  # MSG_LEN in audit.rs
@@ -172,7 +175,7 @@ def hmac_chain_verify_binary(records: list[tuple[int, int, int, bytes]], key: by
             msg
         )
         link_input = prev + canon
-        chain = _hmac.new(key, link_input, hashlib.sha256).digest()
+        chain = _hmac.new(key, link_input, hashlib.sha384).digest()
         prev = chain
 
     # Final state = head hash. If a seal is supplied, check.
@@ -188,13 +191,62 @@ def hmac_chain_verify_binary(records: list[tuple[int, int, int, bytes]], key: by
 
 
 def parse_seal_hex(seal_hex: str) -> tuple[int, bytes]:
-    """Decode a 40-byte seal: 8B BE count || 32B hash."""
+    """Decode a 56-byte seal: 8B BE count || 48B hash (SP-C4.1 upgraded
+    from 40 bytes = 8B + 32B SHA-256 hash)."""
     raw = binascii.unhexlify(seal_hex)
-    if len(raw) != 40:
-        raise ValueError(f"seal must be 40 bytes (80 hex chars), got {len(raw)}")
+    if len(raw) != 56:
+        raise ValueError(f"seal must be 56 bytes (112 hex chars), got {len(raw)}")
     count = int.from_bytes(raw[:8], "big")
     seal_hash = raw[8:]
     return count, seal_hash
+
+
+# SP-AUD-004.1 (2026-05-16): binary-format parser.
+BINARY_MAGIC = b"SPHRAGIS_AUDIT_BINARY_V1"  # 24 bytes
+BINARY_HEADER_LEN = 24 + 8 + 8  # magic + count + reserved = 40
+
+
+def parse_binary_log(buf: bytes) -> tuple[list[tuple[int, int, int, bytes]], list[str]]:
+    """Parse the binary-format audit export written by
+    `audit-flush-binary`. Returns (records, errors). Records are
+    (ts, cat, cave_id, msg) tuples ready for hmac_chain_verify_binary.
+
+    Format:
+      header (40 bytes): magic (24B) || count BE u64 (8B) || reserved BE u64 (8B)
+      record (variable): ts BE u64 (8B) || cat u8 (1B) || mlen u8 (1B)
+                        || cave_id BE u16 (2B) || msg (mlen B)
+    """
+    errors: list[str] = []
+    if len(buf) < BINARY_HEADER_LEN:
+        errors.append(f"file too short: {len(buf)} < {BINARY_HEADER_LEN}-byte header")
+        return [], errors
+    if buf[:24] != BINARY_MAGIC:
+        errors.append(f"bad magic: got {buf[:24]!r}; expected {BINARY_MAGIC!r}")
+        return [], errors
+    declared_count = int.from_bytes(buf[24:32], "big")
+    reserved = int.from_bytes(buf[32:40], "big")
+    if reserved != 0:
+        errors.append(f"reserved field must be 0; got {reserved}")
+        # not fatal — continue parsing
+    records: list[tuple[int, int, int, bytes]] = []
+    pos = BINARY_HEADER_LEN
+    while pos < len(buf):
+        if pos + 12 > len(buf):
+            errors.append(f"truncated at byte {pos}: incomplete record header")
+            break
+        ts = int.from_bytes(buf[pos:pos + 8], "big")
+        cat = buf[pos + 8]
+        mlen = buf[pos + 9]
+        cave_id = int.from_bytes(buf[pos + 10:pos + 12], "big")
+        if pos + 12 + mlen > len(buf):
+            errors.append(f"truncated at byte {pos}: msg length {mlen} extends past EOF")
+            break
+        msg = bytes(buf[pos + 12:pos + 12 + mlen])
+        records.append((ts, cat, cave_id, msg))
+        pos += 12 + mlen
+    if len(records) != declared_count:
+        errors.append(f"declared count {declared_count} != parsed {len(records)} records")
+    return records, errors
 
 
 def main(argv: list[str]) -> int:
@@ -203,15 +255,17 @@ def main(argv: list[str]) -> int:
         description="Sphragis offline audit-log verifier (SP-AUD-004)",
         epilog="See module docstring for binary-format / HMAC-mode details.",
     )
-    p.add_argument("logfile", help="Path to audit.log (text format from `audit-flush`)")
+    p.add_argument("logfile", help="Path to audit log (text format from `audit-flush` OR binary format from `audit-flush-binary` with --binary)")
+    p.add_argument("--binary", action="store_true",
+                   help="Treat logfile as binary-format export (SP-AUD-004.1). Enables full HMAC chain recomputation with --key-hex.")
     p.add_argument("--summary", action="store_true",
                    help="Print per-category counts + monotonicity check")
     p.add_argument("--key-hex", default=None,
-                   help="HMAC key as hex (enables cryptographic mode; today operates only on the hypothetical full-binary input — see module docstring)")
+                   help="HMAC key as hex (48 bytes = 96 hex chars per SP-C4.1 SHA-384 upgrade). Enables cryptographic chain verification when paired with --binary.")
     p.add_argument("--seal-hex", default=None,
-                   help="Seal blob as hex (40 bytes = 8B BE count || 32B hash). Requires --key-hex.")
+                   help="Seal blob as hex (56 bytes = 112 hex chars = 8B BE count || 48B SHA-384 hash; SP-C4.1). Requires --key-hex + --binary.")
     p.add_argument("--binary-format-help", action="store_true",
-                   help="Print a note about why HMAC mode needs binary-format input")
+                   help="Print a note about the SP-AUD-004.1 binary format details")
     args = p.parse_args(argv)
 
     if args.binary_format_help:
@@ -230,6 +284,55 @@ def main(argv: list[str]) -> int:
         print(f"failed to read {args.logfile}: {e}", file=sys.stderr)
         return 2
 
+    if args.binary:
+        # SP-AUD-004.1 binary-format path: full HMAC chain verification possible
+        records, parse_errors = parse_binary_log(buf)
+        print(f"[audit-verifier] parsed {len(records)} binary records from {args.logfile}")
+        if parse_errors:
+            print(f"[audit-verifier] {len(parse_errors)} parse warnings:")
+            for reason in parse_errors[:10]:
+                print(f"  {reason}")
+
+        if args.summary:
+            counts = Counter(CATEGORIES.get(r[1], f"unknown_{r[1]}") for r in records)
+            print(f"[audit-verifier] per-category counts (top 20):")
+            for cat, n in counts.most_common(20):
+                print(f"  {cat:>10s}: {n}")
+
+        if args.key_hex:
+            try:
+                key = binascii.unhexlify(args.key_hex)
+            except binascii.Error as e:
+                print(f"[audit-verifier] --key-hex parse error: {e}", file=sys.stderr)
+                return 2
+            if len(key) != 48:
+                print(f"[audit-verifier] WARNING: key is {len(key)} bytes; SP-C4.1 SHA-384 chain expects 48 bytes", file=sys.stderr)
+
+            seal_count, seal_hash = (None, None)
+            if args.seal_hex:
+                try:
+                    seal_count, seal_hash = parse_seal_hex(args.seal_hex)
+                except ValueError as e:
+                    print(f"[audit-verifier] --seal-hex parse error: {e}", file=sys.stderr)
+                    return 2
+                print(f"[audit-verifier]   seal count: {seal_count}")
+                print(f"[audit-verifier]   seal hash : {seal_hash.hex()}")
+
+            ok, chain_errors = hmac_chain_verify_binary(records, key, seal_count, seal_hash)
+            if ok:
+                print(f"[audit-verifier] HMAC chain VERIFIED ({len(records)} records)")
+            else:
+                print(f"[audit-verifier] HMAC chain FAILED:")
+                for e in chain_errors:
+                    print(f"  {e}")
+                return 1
+
+        rc_errors = parse_errors
+        print("[audit-verifier] PASS" if not rc_errors
+              else f"[audit-verifier] DONE with {len(rc_errors)} parse warning(s)")
+        return 0
+
+    # Text-format path (default).
     entries, parse_errors = parse_text_log(buf)
     print(f"[audit-verifier] parsed {len(entries)} entries from {args.logfile}")
 
@@ -257,10 +360,10 @@ def main(argv: list[str]) -> int:
 
     if args.key_hex:
         print("[audit-verifier] HMAC verification mode requested")
-        print("[audit-verifier]   note: current text-format audit.log drops cave_id+mlen;")
-        print("[audit-verifier]   full HMAC recomputation requires the binary-format export")
-        print("[audit-verifier]   coming in SP-AUD-004.1. Today this mode only validates")
-        print("[audit-verifier]   that the key is well-formed (32-byte hex).")
+        print("[audit-verifier]   note: text-format audit.log drops cave_id+mlen;")
+        print("[audit-verifier]   full HMAC recomputation requires --binary flag")
+        print("[audit-verifier]   pointing at SP-AUD-004.1 binary export.")
+        print("[audit-verifier]   In text-mode --key-hex only validates key format.")
         try:
             key = binascii.unhexlify(args.key_hex)
         except binascii.Error as e:
