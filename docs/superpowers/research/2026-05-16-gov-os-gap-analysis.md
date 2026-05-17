@@ -14,12 +14,17 @@
 
 | Status | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| ✅ HAVE | 15 | 2 | 0 | **17** |
-| ⚠️ PARTIAL | 30 | 5 | 0 | **35** |
-| ❌ MISSING | 30 | 26 | 6 | **62** |
+| ✅ HAVE | **17** | 2 | 0 | **19** |
+| ⚠️ PARTIAL | **35** | 5 | 0 | **40** |
+| ❌ MISSING | **23** | 26 | 6 | **55** |
 | **Total** | 75 | 33 | 6 | **114** |
 
-**Headline (updated 2026-05-16 late evening):** 15% of requirements fully satisfied; 31% partially in place; 54% missing. **P0 fully-satisfied count grew 5 → 15** (the 2026-05-16 autonomous run + cleanup closed 10 P0s); **P0 partial count grew 17 → 30** (an additional 13 P0s landed scaffolding or partial implementation). Remaining P0 ❌ MISSING items split into: 7 founder-required (PRC-001..007), 3 hardware-required (ATT-002 Caliptra, ATT-003 SEP, HW-002 x86_64), 11 multi-session engineering (ATT-006 HSM, AUD-002/004, BLD-001/005/008, UX-001..004, VER-002), 3 external-engagement certs (CRT-001/004/005), 6 large documentation (DOC-001/004/005/006/009 + one founder-doc).
+**Headline (updated 2026-05-16 end of autonomous run batches 1-4):** 17% of requirements fully satisfied; 35% partially in place; 48% missing. **P0 fully-satisfied count: 5 → 17** (12 P0s closed across the autonomous run); **P0 partial count: 17 → 35** (18 additional P0s landed scaffolding or partial implementation). **The autonomous run advanced 30 P0 requirements out of MISSING state.** Remaining 23 P0 MISSING items split into 5 disjoint buckets the autonomous-decision rules say to skip:
+1. **Founder-required (7)**: PRC-001..007 (incorporate, SAM.gov, GSA MAS, SBIR, DARPA pitches, ACT 3 teaming, IWRP/C5)
+2. **Hardware-required (3)**: ATT-002 Caliptra integration, ATT-003 SEP attestation on M4, HW-002 x86_64 port
+3. **Multi-session engineering IMPL (7)**: ATT-006.IMPL, AUD-002 WORM (BatFS-integration scope), BLD-001.IMPL.B-E, BLD-005.IMPL, BLD-008.IMPL, VER-002 IPC info-flow proof, UX-001..004
+4. **External-engagement certs (3)**: CRT-001 FIPS L1 lab, CRT-004 STIG DISA submission, CRT-005 FedRAMP agency sponsorship
+5. **Large remaining documentation (3)**: DOC-001 operator runbook (~100pp), DOC-004 capability statement (founder-led), DOC-009 marketing site (founder-led)
 
 **This is the expected shape.** The last 14 weeks have been *kernel security hardening*, not *productization*. The HAVE column reflects audit-closed isolation primitives. The MISSING column reflects the entire productization mountain (UX, installer, multi-hardware), the procurement on-ramp (incorporation, SAM.gov, SBIR, DARPA), and the certification engineering work (FIPS, STIG, CSfC, attestation).
 
