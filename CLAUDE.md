@@ -19,7 +19,7 @@ See `DESIGN.md`, `DESIGN_CAVES.md`, `DESIGN_NO_BROWSER.md`,
 project-level vision. The short version: security-first
 microkernel with isolated user "caves" (processes), no in-tree
 browser (browsing is done on the host), TLS-enforced networking
-with kernel-mediated HTTPS for caves, BatFS encrypted filesystem.
+with kernel-mediated HTTPS for caves, SealFS encrypted filesystem.
 
 ## Which Claude are you?
 

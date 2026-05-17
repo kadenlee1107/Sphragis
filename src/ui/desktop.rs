@@ -32,7 +32,7 @@ fn set_overlay_open(v: bool) {
 
 pub fn init() {
     // Idempotent — safe to call from main.rs at startup AND from run()
-    // on entry. Restores badge config from BatFS if
+    // on entry. Restores badge config from SealFS if
     // /system/desktop/topbar.cfg exists; silently keeps defaults if not.
     topbar_config::load();
 }

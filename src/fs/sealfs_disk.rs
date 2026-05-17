@@ -1,11 +1,11 @@
-// src/fs/batfs_disk.rs — on-disk persistence layer for BatFS.
+// src/fs/sealfs_disk.rs — on-disk persistence layer for SealFS.
 //
-// Until this module landed, BatFS was a pure in-RAM filesystem
-// (`batfs.rs:90` even called the persistence gap out: "the persistent-
+// Until this module landed, SealFS was a pure in-RAM filesystem
+// (`sealfs.rs:90` even called the persistence gap out: "the persistent-
 // across-reboot fix requires NVMe (Phase 7); for in-memory use, fresh
 // random at boot is enough"). Every reboot wiped FILES[] and any data
 // the user had written. built cave-registry persistence on
-// top of BatFS, but that was moot until BatFS itself survived a reboot.
+// top of SealFS, but that was moot until SealFS itself survived a reboot.
 //
 // This module is the substrate: it owns the on-disk format and exposes
 // minimal mount/format/read/write/zero primitives. It does NOT deal
@@ -20,6 +20,9 @@
 // magic "BATFS\0\0\0", version, layout
 // constants, FS UUID, FS salt, boot
 // counter, HMAC-SHA256 over the rest.
+// (Magic bytes are historical from the Bat_OS naming era; the
+// on-disk format is unchanged across the SealFS rename so existing
+// disk images mount without reformatting.)
 //
 // Sectors 1..64 (32KB): Inode table
 // 128 entries × 256B each.
@@ -70,12 +73,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 const SECTOR_SIZE: usize = 512;
 
-/// Must match `batfs::MAX_FILES`. We can't import the const because
-/// `batfs` imports us, so duplicate it here with a compile-time check
-/// in `batfs::init`.
+/// Must match `sealfs::MAX_FILES`. We can't import the const because
+/// `sealfs` imports us, so duplicate it here with a compile-time check
+/// in `sealfs::init`.
 pub const DISK_MAX_FILES: usize = 128;
 
-/// Sectors per file slot. 128 × 512 = 65 536 = batfs::MAX_FILE_SIZE.
+/// Sectors per file slot. 128 × 512 = 65 536 = sealfs::MAX_FILE_SIZE.
 pub const SLOT_SECTORS: u64 = 128;
 
 /// Inode entry size on disk (256 bytes — fits 2 per sector).
@@ -87,6 +90,11 @@ const INODE_COUNT:  u64   = (DISK_MAX_FILES * INODE_SIZE / SECTOR_SIZE) as u64; 
 const DATA_START:   u64   = INODE_START + INODE_COUNT;                          // 65
 const TOTAL_SECTORS_NEEDED: u64 = DATA_START + (DISK_MAX_FILES as u64) * SLOT_SECTORS;
 
+// Historical magic from the Bat_OS naming era. The on-disk format
+// is unchanged across the SealFS rename — existing disk images
+// continue to mount, so the magic bytes stay as `BATFS\0\0\0`.
+// (The Rust identifier names + UI strings now say SealFS; only the
+// 8 magic bytes on sector 0 are frozen for backwards compat.)
 const SB_MAGIC:     [u8; 8] = *b"BATFS\0\0\0";
 const SB_VERSION:   u32     = 1;
 
@@ -158,10 +166,10 @@ impl Superblock {
     fn deserialize(buf: &[u8; SECTOR_SIZE], master_key: &[u8; 32]) -> Result<Self, &'static str> {
         let mut sb = Self::fresh();
         sb.magic.copy_from_slice(&buf[0..8]);
-        if sb.magic != SB_MAGIC { return Err("not a BatFS disk"); }
+        if sb.magic != SB_MAGIC { return Err("not a SealFS disk"); }
         let mut v4 = [0u8; 4]; v4.copy_from_slice(&buf[8..12]);
         sb.version = u32::from_le_bytes(v4);
-        if sb.version != SB_VERSION { return Err("unsupported BatFS version"); }
+        if sb.version != SB_VERSION { return Err("unsupported SealFS version"); }
         let mut v8 = [0u8; 8];
         v8.copy_from_slice(&buf[16..24]); sb.total_sectors = u64::from_le_bytes(v8);
         v8.copy_from_slice(&buf[24..32]); sb.inode_start   = u64::from_le_bytes(v8);
@@ -178,7 +186,7 @@ impl Superblock {
         // valid tag, and that means they already own the FS anyway.
         let expected = sha256::hmac(master_key, &buf[0..480]);
         if expected != sb.hmac {
-            return Err("BatFS superblock HMAC mismatch (wrong passphrase or tampered disk)");
+            return Err("SealFS superblock HMAC mismatch (wrong passphrase or tampered disk)");
         }
 
         // Sanity-check the layout matches what this build expects. A
@@ -189,7 +197,7 @@ impl Superblock {
             || sb.data_start != DATA_START
             || sb.slot_sectors != SLOT_SECTORS
         {
-            return Err("BatFS layout mismatch (different build?)");
+            return Err("SealFS layout mismatch (different build?)");
         }
 
         Ok(sb)
@@ -279,13 +287,13 @@ static mut MASTER_KEY: [u8; 32] = [0u8; 32];
 pub fn is_mounted() -> bool { MOUNTED.load(Ordering::Acquire) }
 
 /// Read sector 0 and try to deserialize a superblock with the supplied
-/// master key. Returns Ok(()) if the disk has a valid BatFS layout that
+/// master key. Returns Ok(()) if the disk has a valid SealFS layout that
 /// HMACs with this key, Err otherwise. On Ok, the boot counter is
 /// bumped + re-written so a later mount sees a fresh value.
 pub fn mount(master_key: &[u8; 32]) -> Result<u64, &'static str> {
     if !blk::is_ready() { return Err("virtio-blk not ready"); }
     if blk::capacity_sectors() < TOTAL_SECTORS_NEEDED {
-        return Err("disk too small for BatFS");
+        return Err("disk too small for SealFS");
     }
 
     let mut buf = [0u8; SECTOR_SIZE];
@@ -310,13 +318,13 @@ pub fn mount(master_key: &[u8; 32]) -> Result<u64, &'static str> {
     Ok(counter)
 }
 
-/// Wipe a fresh BatFS layout onto the disk. Generates a new UUID +
+/// Wipe a fresh SealFS layout onto the disk. Generates a new UUID +
 /// salt, zeroes the inode table, leaves the data region untouched
 /// (per-slot reads ignore stale bytes for Free slots).
 pub fn format(master_key: &[u8; 32]) -> Result<(), &'static str> {
     if !blk::is_ready() { return Err("virtio-blk not ready"); }
     if blk::capacity_sectors() < TOTAL_SECTORS_NEEDED {
-        return Err("disk too small for BatFS");
+        return Err("disk too small for SealFS");
     }
 
     // Zero the inode table first (so Free slots survive a partial format).
@@ -342,13 +350,13 @@ pub fn format(master_key: &[u8; 32]) -> Result<(), &'static str> {
 }
 
 /// Convenience: try to mount, and if that fails because the disk is
-/// blank (not a BatFS layout), format it. Returns Ok(true) if a fresh
+/// blank (not a SealFS layout), format it. Returns Ok(true) if a fresh
 /// format happened, Ok(false) if an existing FS was mounted, Err if
 /// the disk itself is unusable (no virtio-blk, too small, HMAC fail).
 pub fn mount_or_format(master_key: &[u8; 32]) -> Result<bool, &'static str> {
     match mount(master_key) {
         Ok(_) => Ok(false),
-        Err("not a BatFS disk") => {
+        Err("not a SealFS disk") => {
             format(master_key)?;
             Ok(true)
         }
@@ -360,7 +368,7 @@ pub fn mount_or_format(master_key: &[u8; 32]) -> Result<bool, &'static str> {
 
 /// Read all 128 inodes into the caller's buffer.
 pub fn read_all_inodes(out: &mut [DiskInode; DISK_MAX_FILES]) -> Result<(), &'static str> {
-    if !is_mounted() { return Err("BatFS disk not mounted"); }
+    if !is_mounted() { return Err("SealFS disk not mounted"); }
     let mut sec = [0u8; SECTOR_SIZE];
     for i in 0..DISK_MAX_FILES {
         // Inode `i` is at sector `INODE_START + i / 2`, byte offset
@@ -381,7 +389,7 @@ pub fn read_all_inodes(out: &mut [DiskInode; DISK_MAX_FILES]) -> Result<(), &'st
 /// Write a single inode. Reads the containing sector first so the
 /// neighbouring inode (two per sector) is preserved.
 pub fn write_inode(slot: usize, inode: &DiskInode) -> Result<(), &'static str> {
-    if !is_mounted() { return Err("BatFS disk not mounted"); }
+    if !is_mounted() { return Err("SealFS disk not mounted"); }
     if slot >= DISK_MAX_FILES { return Err("inode slot out of range"); }
     let sector = INODE_START + (slot / 2) as u64;
     let off = (slot % 2) * INODE_SIZE;
@@ -412,7 +420,7 @@ pub fn slot_data_sector(slot: usize) -> u64 {
 /// region, padded out to a whole number of sectors. The trailing bytes
 /// of the last sector are zero-filled.
 pub fn write_data(slot: usize, bytes: &[u8]) -> Result<(), &'static str> {
-    if !is_mounted() { return Err("BatFS disk not mounted"); }
+    if !is_mounted() { return Err("SealFS disk not mounted"); }
     if slot >= DISK_MAX_FILES { return Err("slot out of range"); }
     if bytes.len() > (SLOT_SECTORS as usize) * SECTOR_SIZE {
         return Err("file too large for slot");
@@ -437,7 +445,7 @@ pub fn write_data(slot: usize, bytes: &[u8]) -> Result<(), &'static str> {
 /// `buf`. Caller is responsible for AEAD-decrypting `buf[..len]` using
 /// the inode's nonce + tag.
 pub fn read_data(slot: usize, buf: &mut [u8], len: usize) -> Result<(), &'static str> {
-    if !is_mounted() { return Err("BatFS disk not mounted"); }
+    if !is_mounted() { return Err("SealFS disk not mounted"); }
     if slot >= DISK_MAX_FILES { return Err("slot out of range"); }
     if len > buf.len() { return Err("buffer too small"); }
     if len > (SLOT_SECTORS as usize) * SECTOR_SIZE {
@@ -462,7 +470,7 @@ pub fn read_data(slot: usize, buf: &mut [u8], len: usize) -> Result<(), &'static
 /// file's ciphertext is unrecoverable from disk even before the slot
 /// is reused. Caller is expected to flush() afterward.
 pub fn zero_data(slot: usize) -> Result<(), &'static str> {
-    if !is_mounted() { return Err("BatFS disk not mounted"); }
+    if !is_mounted() { return Err("SealFS disk not mounted"); }
     if slot >= DISK_MAX_FILES { return Err("slot out of range"); }
     let start = slot_data_sector(slot);
     let zero = [0u8; SECTOR_SIZE];
@@ -476,7 +484,7 @@ pub fn zero_data(slot: usize) -> Result<(), &'static str> {
 /// Force a flush down to the host. Caller pattern: do all the writes
 /// the operation needs, then flush once at the end.
 pub fn flush() -> Result<(), &'static str> {
-    if !is_mounted() { return Err("BatFS disk not mounted"); }
+    if !is_mounted() { return Err("SealFS disk not mounted"); }
     blk::flush().map_err(|_| "blk flush failed")
 }
 

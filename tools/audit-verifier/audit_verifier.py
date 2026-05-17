@@ -3,7 +3,7 @@
 Sphragis Offline Audit Verifier — SP-AUD-004.
 
 Verifies an audit log exported from Sphragis (via the `audit-flush`
-shell command, which writes /audit.log to BatFS — operator copies it
+shell command, which writes /audit.log to SealFS — operator copies it
 out for forensic review).
 
 Two verification modes:

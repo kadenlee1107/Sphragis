@@ -12,7 +12,7 @@ const TASK_STACK_PAGES: usize = 4; // 16KB stack per task
 pub const MAX_FDS_PER_TASK: usize = 16;
 
 /// Kind-tagged file descriptor. Pipe and Socket are the live kinds
-/// today; File variant slots in later when BatFS exposes inode-based
+/// today; File variant slots in later when SealFS exposes inode-based
 /// open(). The Task layout doesn't change across kinds — only the
 /// payload of FdEntry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

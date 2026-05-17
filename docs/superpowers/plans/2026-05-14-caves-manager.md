@@ -405,7 +405,7 @@ Caves currently derive mount paths from name. Wave 3 lets the user override. Sam
 ```rust
 /// Override the cave's mount string. Default (None) means "derive from
 /// name: `/ /home/<name>`". Wave 3 stub — the actual mount mechanism
-/// in BatFS isn't dynamically reconfigurable yet; this just stores
+/// in SealFS isn't dynamically reconfigurable yet; this just stores
 /// the user's intent.
 pub fn set_mount_by_name(name: &str, mount: &str) -> Result<(), &'static str> {
     let cave_id = name_to_id(name).ok_or("cave not found")?;
@@ -463,7 +463,7 @@ Adds:
   (caller derives from name).
 
 Both are Wave 3 stubs: storage only, no enforcement. The net
-subsystem still uses global `is_isolated()`; BatFS mounts are still
+subsystem still uses global `is_isolated()`; SealFS mounts are still
 derived from name. Per-cave enforcement of both is a Wave 4+ kernel
 item. Surfaced now so the Wave 3 create/configure form can capture
 the user's intent without losing it.
@@ -2407,7 +2407,7 @@ Update `AppMode::ConfirmDestroy(_)` arm in `paint` to look up the cave name from
                 body_lines: &[
                     "  kill all processes inside the cave",
                     "  zero the cave's encryption keys",
-                    "  wipe its BatFS subtree",
+                    "  wipe its SealFS subtree",
                     "  clear MLS labels + taint records",
                     "",
                     "IRREVERSIBLE.",

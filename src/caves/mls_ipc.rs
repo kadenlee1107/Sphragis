@@ -20,12 +20,12 @@
 //!
 //! Crypto-binding (2026-05-13): every queued message is
 //! ChaCha20-Poly1305 sealed with AAD = sender_id || sensitivity ||
-//! integrity, keyed by a per-boot MAC key derived from BatFS's
+//! integrity, keyed by a per-boot MAC key derived from SealFS's
 //! master key. A memory-corrupting attacker who flips any of those
 //! label bytes — even keeping the body the same — invalidates the
 //! Poly1305 tag, so `recv` returns `MlsIpcError::AeadFail` instead
 //! of delivering the body under a downgraded label. Same TOCTOU
-//! property as the AEAD-bound BatFS file labels we already ship.
+//! property as the AEAD-bound SealFS file labels we already ship.
 //!
 //! Not yet:
 //!   - No declassification path (deliberate downgrade by a trusted
@@ -84,7 +84,7 @@ impl LabeledMsg {
 }
 
 /// Monotonic nonce counter for the mls_ipc AEAD. Same discipline as
-/// `batfs::next_nonce` — increment on each send so no two messages
+/// `sealfs::next_nonce` — increment on each send so no two messages
 /// ever share a nonce.
 static NONCE_COUNTER: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(1);
@@ -96,7 +96,7 @@ fn next_nonce() -> [u8; 12] {
     out
 }
 
-/// Per-boot MAC key for mls_ipc. Derived from BatFS's master key
+/// Per-boot MAC key for mls_ipc. Derived from SealFS's master key
 /// the first time `mls_ipc_key()` is called, then cached. Volatile
 /// read of the master so the compiler can't dead-store-eliminate
 /// it in a future refactor.
@@ -107,7 +107,7 @@ static MLS_IPC_KEY_READY: core::sync::atomic::AtomicBool =
 fn mls_ipc_key() -> [u8; 32] {
     unsafe {
         if !MLS_IPC_KEY_READY.load(Ordering::Acquire) {
-            let master = crate::fs::batfs::master_key();
+            let master = crate::fs::sealfs::master_key();
             let derived = sha256::derive_key(&master, b"mls-ipc-aead-v1");
             MLS_IPC_KEY = derived;
             MLS_IPC_KEY_READY.store(true, Ordering::Release);

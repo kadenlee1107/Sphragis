@@ -104,9 +104,9 @@ CPU-dispatch logic: detect CPU family, choose the strongest available barrier.
 | Keyboard / mouse | USB HID + (early-boot) i8042 PS/2 fallback |
 | TPM | TIS (Trusted Computing Group ISA) MMIO interface; standard across vendors |
 
-### A8: BatFS on NVMe
+### A8: SealFS on NVMe
 
-BatFS today uses an in-kernel storage abstraction. x86_64 wires the same abstraction to NVMe (instead of M4 ANS). Per-file AEAD + per-cave keys unchanged.
+SealFS today uses an in-kernel storage abstraction. x86_64 wires the same abstraction to NVMe (instead of M4 ANS). Per-file AEAD + per-cave keys unchanged.
 
 ### A9: Confidential VM compatibility
 

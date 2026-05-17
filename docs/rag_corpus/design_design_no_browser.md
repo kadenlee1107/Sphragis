@@ -61,7 +61,7 @@ Sphragis is a **secure workstation / personal HSM**:
 
 - **Cryptographic operations** — keys never leave the OS. Argon2id,
   Ed25519, P-384, RSA-PSS, ML-KEM-768, ML-DSA. Already in tree.
-- **Secure file management** — BatFS encrypted filesystem; persistent
+- **Secure file management** — SealFS encrypted filesystem; persistent
   caves; auditable VFS. Already in tree.
 - **Secure document handling** — view, sign, encrypt, decrypt local
   files. No web fetching.
@@ -115,7 +115,7 @@ Concretely:
 - The HTTPS fetch helpers in `src/net/fetch.rs` etc. Same justification.
 - The TrueType font rasterizer in `src/ui/{font,truetype}.rs`. Used by
   the WM/shell, not just the browser.
-- All crypto, BatFS, caves, syscall layer. Untouched.
+- All crypto, SealFS, caves, syscall layer. Untouched.
 - The autopilot infrastructure in `scripts/autopilot.sh` —
   reusable for other tracks.
 

@@ -178,7 +178,7 @@ const Wave3Specs = () => (
       <W3Row k="FS" v="no perms / owner / mtime — only STATUS / NAME / SIZE / CIPHER / MERKLE columns" />
       <W3Row k="CM key exchange" v="X25519 is placeholder; session key derived SHA-256(peer_ip + ts) — pill labeled 'K' not 'X25519'" />
       <W3Row k="CM message length" v="80-char hard cap shown by counter — enforced client-side" />
-      <W3Row k="FS tree view" v="not implemented — BatFS is currently flat" />
+      <W3Row k="FS tree view" v="not implemented — SealFS is currently flat" />
     </W3Block>
   </div>
 );

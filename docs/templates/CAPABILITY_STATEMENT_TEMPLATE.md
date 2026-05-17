@@ -81,7 +81,7 @@ We are an unfunded {COMPANY_AGE_MONTHS}-month-old US-incorporated Delaware C-Cor
 | Microkernel + cave isolation | TRL 6 (boots on real M4 + comprehensive QEMU CI) |
 | CNSA 2.0 crypto + boot KATs | TRL 7 (production-grade primitives) |
 | Attestation primitive | TRL 5 (API + measurement + per-cave registry; hardware-rooting designs landed) |
-| BatFS encrypted filesystem | TRL 7 (AES-256-GCM-SIV; per-cave + per-file keys) |
+| SealFS encrypted filesystem | TRL 7 (AES-256-GCM-SIV; per-cave + per-file keys) |
 | Audit chain | TRL 7 (HMAC-SHA-256 + tamper-evident; SHA-384 upgrade designed) |
 | Window manager + multi-app UI | TRL 4 (design landed; implementation pending) |
 | Multi-hardware (x86_64) | TRL 3 (design landed; implementation pending) |

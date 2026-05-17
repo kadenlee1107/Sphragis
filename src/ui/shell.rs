@@ -4,7 +4,7 @@
 
 use crate::platform;
 use crate::ui::console;
-use crate::fs::batfs;
+use crate::fs::sealfs;
 use crate::net;
 
 const MAX_CMD_LEN: usize = 256;
@@ -221,7 +221,7 @@ pub fn execute_cmd(cmd: &str) {
 
 /// Detect a `> <file>` redirect at the END of the command line and,
 /// if present, capture the inner command's console output and write
-/// it into BatFS via `ns_create`. The trailing-only matching avoids
+/// it into SealFS via `ns_create`. The trailing-only matching avoids
 /// the false-positive problem with quoted strings ('"foo > bar"'
 /// stays intact) — split on the LAST ` > ` after stripping a
 /// trailing quoted segment.
@@ -284,13 +284,13 @@ fn parse_redirect(cmd: &str) -> (&str, Option<&str>) {
 }
 
 fn execute_with_redirect(inner: &str, filename: &str) {
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     console::begin_capture();
     execute_inner(inner);
     let captured = console::end_capture();
     // Idempotent: overwrite a prior capture with the same name.
-    let _ = batfs::ns_delete(filename);
-    match batfs::ns_create(filename, captured) {
+    let _ = sealfs::ns_delete(filename);
+    match sealfs::ns_create(filename, captured) {
         Ok(()) => {
             console::puts("[shell] captured ");
             print_num(captured.len());
@@ -442,7 +442,7 @@ fn execute_inner(cmd: &str) {
         "sys-wg-selftest"     => cmd_sys_wg_service_selftest(),
         "cave-private-selftest" => cmd_cave_private_selftest(),
         "mount-ns-selftest"   => cmd_mount_ns_selftest(),
-        "batfs-quota-selftest" => cmd_batfs_quota_selftest(),
+        "sealfs-quota-selftest" => cmd_sealfs_quota_selftest(),
         "ocsp-selftest"       => cmd_ocsp_selftest(),
         "conntrack-selftest"  => cmd_conntrack_selftest(),
         "fw-hardening-selftest" => cmd_fw_hardening_selftest(),
@@ -495,7 +495,7 @@ fn execute_inner(cmd: &str) {
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
-            // pkg install <bundle-in-batfs>
+            // pkg install <bundle-in-sealfs>
             // pkg list
             // pkg remove <name>
             // pkg stage <name> <ip:port>     (transfer from pkg_serve.py)
@@ -2286,20 +2286,20 @@ fn cmd_cave_quota(name: &str, pages_str: &str) {
 
 /// `mount-ns` — gap-audit item 032 mount namespace. Demonstrates
 /// per-cave file name scoping by prefixing the active cave's name
-/// onto BatFS operations. Subcommands:
+/// onto SealFS operations. Subcommands:
 ///   mount-ns                         show current prefix + scoped files
 ///   mount-ns ls                      list files in the active prefix
 ///   mount-ns write <name> <data>     create scoped file
 ///   mount-ns read  <name>            read scoped file
 ///   mount-ns rm    <name>            delete scoped file
 ///
-/// Not wired into the default batfs::* path yet (42 callers, doing it
+/// Not wired into the default sealfs::* path yet (42 callers, doing it
 /// silently is risky for a single batch). This command proves the
-/// scoping is sound; a follow-up batch flips the BatFS API to apply
+/// scoping is sound; a follow-up batch flips the SealFS API to apply
 /// the prefix everywhere.
 fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
     use crate::caves::cave;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
     let mut prefix_buf = [0u8; 80];
     let plen = cave::active_mount_prefix(&mut prefix_buf);
@@ -2339,7 +2339,7 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
             console::puts(prefix);
             console::puts("):\n");
             let mut shown = 0usize;
-            batfs::list(|name, size, _enc| {
+            sealfs::list(|name, size, _enc| {
                 if let Some(visible) = name.strip_prefix(prefix) {
                     console::puts("    ");
                     console::puts(visible);
@@ -2359,7 +2359,7 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
                 None => { console::puts("  bad name (empty or too long)\n"); return; }
             };
             let full_name = unsafe { core::str::from_utf8_unchecked(&full[..n]) };
-            match batfs::create(full_name, arg2.as_bytes()) {
+            match sealfs::create(full_name, arg2.as_bytes()) {
                 Ok(()) => {
                     console::puts("  ok — wrote ");
                     console::puts(full_name);
@@ -2377,7 +2377,7 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
             };
             let full_name = unsafe { core::str::from_utf8_unchecked(&full[..n]) };
             let mut buf = [0u8; 4096];
-            match batfs::read(full_name, &mut buf) {
+            match sealfs::read(full_name, &mut buf) {
                 Ok(len) => {
                     console::puts("  ");
                     for &b in &buf[..len] {
@@ -2394,7 +2394,7 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
                 None => { console::puts("  bad name\n"); return; }
             };
             let full_name = unsafe { core::str::from_utf8_unchecked(&full[..n]) };
-            match batfs::delete(full_name) {
+            match sealfs::delete(full_name) {
                 Ok(()) => console::puts("  deleted\n"),
                 Err(e) => { console::puts("  err: "); console::puts(e); console::puts("\n"); }
             }
@@ -2407,7 +2407,7 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
 
 /// `mount-ns-selftest` — gap-audit item 032 auto-application proof.
 ///
-/// Drives the `batfs::ns_*` wrappers from two different cave
+/// Drives the `sealfs::ns_*` wrappers from two different cave
 /// contexts (sys-wg + the kernel-ns sentinel built by
 /// `sys_caves::init`) and asserts the four namespace properties:
 ///
@@ -2419,14 +2419,14 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
 ///      with the prefix stripped — the cave never sees the
 ///      on-disk naming scheme).
 ///   4. The kernel/admin context (no active cave) sees BOTH
-///      on-disk entries via the un-prefixed `batfs::list`.
+///      on-disk entries via the un-prefixed `sealfs::list`.
 ///
 /// Cleans up by deleting both files at the end. Failure exits
 /// early with a `FAIL:` line; success prints the marker that the
 /// QEMU runner script greps for.
 fn cmd_mount_ns_selftest() {
     use crate::caves::{cave, sys_caves};
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
     console::puts_hi("  MOUNT NAMESPACE AUTO-APPLICATION SELF-TEST\n");
 
@@ -2449,17 +2449,17 @@ fn cmd_mount_ns_selftest() {
 
     // Pre-clean — leftover files from a prior aborted run would
     // make this run report spurious failures.
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(TEST_NAME));
-    let _ = cave::with_cave_active(kns_id,    || batfs::ns_delete(TEST_NAME));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(TEST_NAME));
+    let _ = cave::with_cave_active(kns_id,    || sealfs::ns_delete(TEST_NAME));
 
     // (1) Write the same logical name from two caves.
     if let Err(e) = cave::with_cave_active(sys_wg_id, || {
-        batfs::ns_create(TEST_NAME, b"sys-wg view")
+        sealfs::ns_create(TEST_NAME, b"sys-wg view")
     }) {
         console::puts("  ✗ FAIL: ns_create from sys-wg: "); console::puts(e); console::puts("\n"); return;
     }
     if let Err(e) = cave::with_cave_active(kns_id, || {
-        batfs::ns_create(TEST_NAME, b"kernel-ns view")
+        sealfs::ns_create(TEST_NAME, b"kernel-ns view")
     }) {
         console::puts("  ✗ FAIL: ns_create from kernel-ns: "); console::puts(e); console::puts("\n"); return;
     }
@@ -2467,14 +2467,14 @@ fn cmd_mount_ns_selftest() {
 
     // (2) Each cave reads its own content.
     let mut buf = [0u8; 64];
-    let n = match cave::with_cave_active(sys_wg_id, || batfs::ns_read(TEST_NAME, &mut buf)) {
+    let n = match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(TEST_NAME, &mut buf)) {
         Ok(n) => n,
         Err(e) => { console::puts("  ✗ FAIL: ns_read from sys-wg: "); console::puts(e); console::puts("\n"); return; }
     };
     if &buf[..n] != b"sys-wg view" {
         console::puts("  ✗ FAIL: sys-wg read returned wrong content\n"); return;
     }
-    let n = match cave::with_cave_active(kns_id, || batfs::ns_read(TEST_NAME, &mut buf)) {
+    let n = match cave::with_cave_active(kns_id, || sealfs::ns_read(TEST_NAME, &mut buf)) {
         Ok(n) => n,
         Err(e) => { console::puts("  ✗ FAIL: ns_read from kernel-ns: "); console::puts(e); console::puts("\n"); return; }
     };
@@ -2489,7 +2489,7 @@ fn cmd_mount_ns_selftest() {
     let mut sys_wg_count = 0usize;
     let mut sys_wg_name_match = false;
     cave::with_cave_active(sys_wg_id, || {
-        batfs::ns_list(|name, _, _| {
+        sealfs::ns_list(|name, _, _| {
             sys_wg_count += 1;
             if name == TEST_NAME { sys_wg_name_match = true; }
         });
@@ -2501,7 +2501,7 @@ fn cmd_mount_ns_selftest() {
     // separator (that would be a prefix leak).
     let mut sys_wg_leak = false;
     cave::with_cave_active(sys_wg_id, || {
-        batfs::ns_list(|name, _, _| {
+        sealfs::ns_list(|name, _, _| {
             if name.contains(':') { sys_wg_leak = true; }
         });
     });
@@ -2512,7 +2512,7 @@ fn cmd_mount_ns_selftest() {
 
     let mut kns_name_match = false;
     cave::with_cave_active(kns_id, || {
-        batfs::ns_list(|name, _, _| {
+        sealfs::ns_list(|name, _, _| {
             if name == TEST_NAME { kns_name_match = true; }
         });
     });
@@ -2522,10 +2522,10 @@ fn cmd_mount_ns_selftest() {
     console::puts("  ✓ kernel-ns ns_list shows only its own files, prefix stripped\n");
 
     // (4) Kernel/admin context sees BOTH on-disk entries via the
-    //     un-prefixed batfs::list.
+    //     un-prefixed sealfs::list.
     let mut saw_sys_wg = false;
     let mut saw_kns = false;
-    batfs::list(|name, _, _| {
+    sealfs::list(|name, _, _| {
         if name == "sys-wg:ns-isolation-probe"     { saw_sys_wg = true; }
         if name == "kernel-ns:ns-isolation-probe"  { saw_kns = true; }
     });
@@ -2540,16 +2540,16 @@ fn cmd_mount_ns_selftest() {
     console::puts("  ✓ kernel/admin sees both prefixed entries on the un-prefixed view\n");
 
     // Cleanup — both files. Each from its own cave context.
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(TEST_NAME));
-    let _ = cave::with_cave_active(kns_id,    || batfs::ns_delete(TEST_NAME));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(TEST_NAME));
+    let _ = cave::with_cave_active(kns_id,    || sealfs::ns_delete(TEST_NAME));
 
     console::puts("  ✓ mount-namespace auto-application: per-cave file isolation verified\n");
 }
 
-/// `batfs-quota-selftest` — gap-audit item 030 second slice.
+/// `sealfs-quota-selftest` — gap-audit item 030 second slice.
 ///
-/// Proves the cave memory quota is enforced on the BatFS write
-/// path (via `batfs::ns_create`) in addition to the shm path:
+/// Proves the cave memory quota is enforced on the SealFS write
+/// path (via `sealfs::ns_create`) in addition to the shm path:
 ///
 ///   1. Drive into sys-wg via `with_cave_active`, tighten its
 ///      quota to baseline + 2 pages.
@@ -2567,11 +2567,11 @@ fn cmd_mount_ns_selftest() {
 /// which (per the mount-ns-auto-apply fix) also rebinds
 /// `ACTIVE_CAVE_ID` so the charge/release calls inside the
 /// closure act on sys-wg, not on the kernel-shell context.
-fn cmd_batfs_quota_selftest() {
+fn cmd_sealfs_quota_selftest() {
     use crate::caves::{cave, sys_caves};
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
-    console::puts_hi("  BATFS QUOTA-ENFORCEMENT SELF-TEST (cave: sys-wg)\n");
+    console::puts_hi("  SEALFS QUOTA-ENFORCEMENT SELF-TEST (cave: sys-wg)\n");
 
     let sys_wg_id = match sys_caves::sys_wg_id() {
         Some(id) => id as u16,
@@ -2586,7 +2586,7 @@ fn cmd_batfs_quota_selftest() {
 
     // Pre-clean any leftovers from a prior aborted run.
     for f in FILES.iter() {
-        let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(f));
+        let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(f));
     }
 
     // Baseline + tightened quota.
@@ -2609,14 +2609,14 @@ fn cmd_batfs_quota_selftest() {
     // Helper: restore quota + cleanup files on any exit path.
     let restore = |files: &[&str]| {
         for f in files.iter() {
-            let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(f));
+            let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(f));
         }
         let _ = cave::set_quota_by_name("sys-wg", original_quota);
     };
 
     // Step 2 + 3: two 1-page creates succeed.
     for f in FILES.iter().take(2) {
-        if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(f, b"x")) {
+        if let Err(e) = cave::with_cave_active(sys_wg_id, || sealfs::ns_create(f, b"x")) {
             console::puts("  ✗ FAIL: ns_create("); console::puts(f);
             console::puts(") within quota: "); console::puts(e); console::puts("\n");
             restore(&FILES);
@@ -2626,7 +2626,7 @@ fn cmd_batfs_quota_selftest() {
     console::puts("  ✓ two within-quota creates succeeded\n");
 
     // Step 4: third create exceeds quota.
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_create(FILES[2], b"x")) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_create(FILES[2], b"x")) {
         Err("cave: memory quota exceeded") => {
             console::puts("  ✓ third create rejected with `cave: memory quota exceeded`\n");
         }
@@ -2644,7 +2644,7 @@ fn cmd_batfs_quota_selftest() {
     }
 
     // Step 5: delete releases the page.
-    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILES[0])) {
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILES[0])) {
         console::puts("  ✗ FAIL: ns_delete(bq-a): ");
         console::puts(e); console::puts("\n");
         restore(&FILES);
@@ -2660,7 +2660,7 @@ fn cmd_batfs_quota_selftest() {
     console::puts("  ✓ delete released 1 quota page (used now baseline+1)\n");
 
     // Step 6: post-release create succeeds.
-    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(FILES[2], b"x")) {
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || sealfs::ns_create(FILES[2], b"x")) {
         console::puts("  ✗ FAIL: post-release ns_create rejected: ");
         console::puts(e); console::puts("\n");
         restore(&FILES);
@@ -2681,7 +2681,7 @@ fn cmd_batfs_quota_selftest() {
         return;
     }
     console::puts("  ✓ cleanup restored quota counter to baseline\n");
-    console::puts("  ✓ batfs quota-enforcement: charge + release verified\n");
+    console::puts("  ✓ sealfs quota-enforcement: charge + release verified\n");
 }
 
 /// `ocsp-selftest` — gap-audit item 052b. Exercises the OCSP
@@ -3104,10 +3104,10 @@ fn cmd_fw_hardening_selftest() {
 ///      `<inner> > <filename>` only when quotes are balanced and
 ///      the tail is a clean single word.
 ///   5. End-to-end via `execute_with_redirect`: capture a known
-///      string, write to BatFS through `ns_create`, read it back
+///      string, write to SealFS through `ns_create`, read it back
 ///      through `ns_read`, assert the content matches.
 fn cmd_redirect_selftest() {
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
     console::puts_hi("  SHELL OUTPUT-REDIRECT / CAPTURE SELF-TEST\n");
 
@@ -3139,17 +3139,17 @@ fn cmd_redirect_selftest() {
     }
     console::puts("  ✓ parse_redirect: tail split, quote-balanced, no false-positives\n");
 
-    // Step 5: end-to-end shell -> BatFS.
+    // Step 5: end-to-end shell -> SealFS.
     const FILE: &str = "redirect-probe.txt";
-    let _ = batfs::ns_delete(FILE);
+    let _ = sealfs::ns_delete(FILE);
     execute_with_redirect("whoami", FILE);
 
     let mut buf = [0u8; 1024];
-    match batfs::ns_read(FILE, &mut buf) {
+    match sealfs::ns_read(FILE, &mut buf) {
         Ok(n) => {
             if n == 0 {
                 console::puts("  ✗ FAIL: redirect produced empty file\n");
-                let _ = batfs::ns_delete(FILE);
+                let _ = sealfs::ns_delete(FILE);
                 return;
             }
             // `whoami` prints SOMETHING — we don't pin the exact
@@ -3158,7 +3158,7 @@ fn cmd_redirect_selftest() {
             // markers from later code paths.
             if buf[..n].iter().all(|&b| b == 0) {
                 console::puts("  ✗ FAIL: redirect file is all-zero\n");
-                let _ = batfs::ns_delete(FILE);
+                let _ = sealfs::ns_delete(FILE);
                 return;
             }
             console::puts("  ✓ `whoami > ");
@@ -3174,7 +3174,7 @@ fn cmd_redirect_selftest() {
             return;
         }
     }
-    let _ = batfs::ns_delete(FILE);
+    let _ = sealfs::ns_delete(FILE);
     console::puts("  ✓ shell `>` redirect end-to-end (capture -> ns_create -> ns_read) verified\n");
 }
 
@@ -3351,8 +3351,8 @@ fn cmd_procs(arg: &str) {
 
 /// `pkg stage <name> <ip:port>` — connect to a `pkg_serve.py`
 /// instance, read the 4-byte length prefix + bundle bytes, and
-/// write the result into BatFS at `name`. Bridges the
-/// host-built bundle into BatFS so `pkg install` can verify it.
+/// write the result into SealFS at `name`. Bridges the
+/// host-built bundle into SealFS so `pkg install` can verify it.
 fn cmd_pkg_stage(name: &str, target: &str) {
     use crate::net;
     if name.is_empty() || target.is_empty() {
@@ -3432,9 +3432,9 @@ fn cmd_pkg_stage(name: &str, target: &str) {
     }
 
     // Delete any prior staged file with this name so re-staging is
-    // idempotent. (BatFS::create refuses to overwrite.)
-    let _ = crate::fs::batfs::delete(name);
-    match crate::fs::batfs::create(name, &buf[..off]) {
+    // idempotent. (SealFS::create refuses to overwrite.)
+    let _ = crate::fs::sealfs::delete(name);
+    match crate::fs::sealfs::create(name, &buf[..off]) {
         Ok(()) => {
             console::puts("  ✓ staged ");
             console::puts(name);
@@ -3445,19 +3445,19 @@ fn cmd_pkg_stage(name: &str, target: &str) {
             console::puts("\n");
         }
         Err(e) => {
-            console::puts("  ✗ batfs::create failed: ");
+            console::puts("  ✗ sealfs::create failed: ");
             console::puts(e); console::puts("\n");
         }
     }
 }
 
-/// `pkg install <bundle.bpkg>` — read a BPKG bundle from BatFS,
+/// `pkg install <bundle.bpkg>` — read a BPKG bundle from SealFS,
 /// verify signature against the baked release pubkey, sha-256 each
-/// payload, then unpack into BatFS. Gap-audit item 033.
+/// payload, then unpack into SealFS. Gap-audit item 033.
 fn cmd_pkg_install(bundle_name: &str) {
     use crate::kernel::pkg;
     if bundle_name.is_empty() {
-        console::puts("  usage: pkg install <bundle-in-batfs>\n");
+        console::puts("  usage: pkg install <bundle-in-sealfs>\n");
         return;
     }
     let pubkey_hex = match RELEASE_PUBKEY_HEX {
@@ -3472,9 +3472,9 @@ fn cmd_pkg_install(bundle_name: &str) {
         None => { console::puts("  invalid baked pubkey hex\n"); return; }
     };
 
-    // Read the bundle from BatFS.
+    // Read the bundle from SealFS.
     let mut buf = [0u8; pkg::MAX_BUNDLE];
-    let n = match crate::fs::batfs::read(bundle_name, &mut buf) {
+    let n = match crate::fs::sealfs::read(bundle_name, &mut buf) {
         Ok(n) => n,
         Err(e) => { console::puts("  bundle read failed: "); console::puts(e); console::puts("\n"); return; }
     };
@@ -3585,16 +3585,16 @@ fn cmd_release_pubkey() {
     }
 }
 
-/// `release-verify <batfs-file> <sig-hex>` — verify an Ed25519
-/// signature over a file in BatFS, against the build-time-pinned
+/// `release-verify <sealfs-file> <sig-hex>` — verify an Ed25519
+/// signature over a file in SealFS, against the build-time-pinned
 /// release-engineer pubkey. Prints PASS/FAIL with the file's
 /// SHA-256.
 fn cmd_release_verify(name: &str, sig_hex: &str) {
     use crate::crypto::{sha256, sig};
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
     if name.is_empty() || sig_hex.is_empty() {
-        console::puts("  usage: release-verify <batfs-file> <sig-hex-128chars>\n");
+        console::puts("  usage: release-verify <sealfs-file> <sig-hex-128chars>\n");
         return;
     }
 
@@ -3630,7 +3630,7 @@ fn cmd_release_verify(name: &str, sig_hex: &str) {
     // bundles need the off-device verifier (signed manifest of chunk
     // hashes is the right shape but out of scope for this command).
     let mut file_buf = [0u8; 1024 * 1024];
-    let file_len = match batfs::read(name, &mut file_buf) {
+    let file_len = match sealfs::read(name, &mut file_buf) {
         Ok(n) => n,
         Err(e) => { console::puts("  file read failed: "); console::puts(e); console::puts("\n"); return; }
     };
@@ -5894,15 +5894,15 @@ fn print_num(n: usize) {
 
 fn cmd_ls() {
     // gap-audit 032: ns_stats / ns_list scope to the active cave's
-    // mount namespace. Kernel context sees the global BatFS view.
-    let (count, max) = batfs::ns_stats();
+    // mount namespace. Kernel context sees the global SealFS view.
+    let (count, max) = sealfs::ns_stats();
     console::puts_hi("  ENCRYPTED VAULT\n");
     console::puts("  ----------------\n");
 
     if count == 0 {
         console::puts("  (empty)\n");
     } else {
-        batfs::ns_list(|name, size, encrypted| {
+        sealfs::ns_list(|name, size, encrypted| {
             console::puts("  ");
             if encrypted {
                 console::puts("[ENC] ");
@@ -5934,7 +5934,7 @@ fn cmd_write(name: &str, data: &str) {
         return;
     }
 
-    match batfs::ns_create(name, data.as_bytes()) {
+    match sealfs::ns_create(name, data.as_bytes()) {
         Ok(()) => {
             console::puts("  Created: ");
             console::puts(name);
@@ -5957,7 +5957,7 @@ fn cmd_read(name: &str) {
     }
 
     let mut buf = [0u8; 4096];
-    match batfs::ns_read(name, &mut buf) {
+    match sealfs::ns_read(name, &mut buf) {
         Ok(size) => {
             console::puts("  [decrypted, integrity verified]\n");
             console::puts("  ");
@@ -5985,7 +5985,7 @@ fn cmd_rm(name: &str) {
         return;
     }
 
-    match batfs::ns_delete(name) {
+    match sealfs::ns_delete(name) {
         Ok(()) => {
             console::puts("  Secure deleted: ");
             console::puts(name);
@@ -6006,7 +6006,7 @@ fn cmd_verify(name: &str) {
     }
 
     let mut buf = [0u8; 4096];
-    match batfs::ns_read(name, &mut buf) {
+    match sealfs::ns_read(name, &mut buf) {
         Ok(_) => {
             console::puts("  INTEGRITY: PASS\n");
             console::puts("  File '");
@@ -6351,7 +6351,7 @@ fn cmd_comms(sub: &str, _arg: &str) {
 fn cmd_comms_my_id() {
     let mut hex = [0u8; 64];
     if !crate::ui::apps::comms::my_id_hex(&mut hex) {
-        console::puts("  comms identity unavailable (BatFS not ready?)\n");
+        console::puts("  comms identity unavailable (SealFS not ready?)\n");
         return;
     }
     console::puts("  this cave's comms identity: ");
@@ -6814,7 +6814,7 @@ fn cmd_caves(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
 
             if !docker_image.is_empty() {
                 // Docker-backed cave. Phase 3: derive the per-cave AES-256
-                // key up-front (same path as native BatFS) so we can pass
+                // key up-front (same path as native SealFS) so we can pass
                 // it to the daemon in CREATE and have the cave's audit
                 // log encrypted at rest.
                 //
@@ -7587,14 +7587,14 @@ fn cmd_kbd_stats() {
     console::puts("\n");
 }
 
-/// load a BatFS file into the editor's active tab and
+/// load a SealFS file into the editor's active tab and
 /// switch to ED. `edit foo.txt` from the shell.
 fn cmd_edit(name: &str) {
     if name.is_empty() {
         console::puts("  usage: edit <filename>\n");
         return;
     }
-    match crate::ui::apps::editor::load_from_batfs(name) {
+    match crate::ui::apps::editor::load_from_sealfs(name) {
         Ok(()) => {
             console::puts("  edit: loaded ");
             console::puts(name);
@@ -7979,9 +7979,9 @@ fn cmd_audit(arg: &str) {
     }
 }
 
-/// serialize the audit ring and write it to BatFS as
+/// serialize the audit ring and write it to SealFS as
 /// /audit-<count>.log. Persists what we have. Cheap O(N) walk +
-/// one BatFS create call. (Append-only is the next milestone — for
+/// one SealFS create call. (Append-only is the next milestone — for
 /// now we overwrite the same path with the latest dump.)
 fn cmd_audit_flush() {
     static mut FLUSH_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
@@ -7991,14 +7991,14 @@ fn cmd_audit_flush() {
         console::puts("  audit-flush: nothing to write\n");
         return;
     }
-    match crate::fs::batfs::create("audit.log", &buf[..n]) {
+    match crate::fs::sealfs::create("audit.log", &buf[..n]) {
         Ok(()) => {
             console::puts("  audit-flush: wrote ");
             crate::kernel::mm::print_num(n);
             console::puts(" bytes to /audit.log\n");
         }
         Err(e) => {
-            console::puts("  audit-flush: BatFS write failed: ");
+            console::puts("  audit-flush: SealFS write failed: ");
             console::puts(e);
             console::puts("\n");
         }
@@ -8011,7 +8011,7 @@ fn cmd_audit_flush() {
 /// allowing `tools/audit-verifier/audit_verifier.py --binary` to
 /// recompute the HMAC chain bit-exact.
 fn cmd_audit_flush_binary() {
-    match crate::security::audit::flush_to_batfs_binary() {
+    match crate::security::audit::flush_to_sealfs_binary() {
         Ok(0) => console::puts("  audit-flush-binary: nothing to write\n"),
         Ok(n) => {
             console::puts("  audit-flush-binary: wrote ");
@@ -8019,7 +8019,7 @@ fn cmd_audit_flush_binary() {
             console::puts(" bytes to /audit.bin\n");
         }
         Err(e) => {
-            console::puts("  audit-flush-binary: BatFS write failed: ");
+            console::puts("  audit-flush-binary: SealFS write failed: ");
             console::puts(e);
             console::puts("\n");
         }
@@ -8200,7 +8200,7 @@ fn cmd_mls_check(src: &str, dst: &str, op: &str) {
 
 /// `mls-selftest` — gov-grade §3.2 (Bell-LaPadula MAC / MLS).
 ///
-/// Pins down the lattice and one concrete BatFS enforcement point:
+/// Pins down the lattice and one concrete SealFS enforcement point:
 ///
 ///   1. `can_flow` returns the right verdict for all four
 ///      (L_s vs L_o, Read vs Write) combinations.
@@ -8215,9 +8215,9 @@ fn cmd_mls_check(src: &str, dst: &str, op: &str) {
 fn cmd_mls_selftest() {
     use crate::caves::cave::{self, can_flow, MlsOp, Sensitivity};
     use crate::caves::sys_caves;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
-    console::puts_hi("  MLS LATTICE + BatFS ENFORCEMENT SELF-TEST\n");
+    console::puts_hi("  MLS LATTICE + SealFS ENFORCEMENT SELF-TEST\n");
 
     // ── (1) Lattice round trip ──
     let pairs = [
@@ -8238,7 +8238,7 @@ fn cmd_mls_selftest() {
     }
     console::puts("  ✓ Bell-LaPadula lattice: 6/6 cases (no read-up, no write-down, equal levels)\n");
 
-    // ── (2) BatFS enforcement ──
+    // ── (2) SealFS enforcement ──
     let sys_wg_id = match sys_caves::sys_wg_id() {
         Some(id) => id as u16,
         None => { console::puts("  ✗ FAIL: sys-wg cave not initialised\n"); return; }
@@ -8251,14 +8251,14 @@ fn cmd_mls_selftest() {
     const FILE_NAME: &str = "mls-probe";
 
     // Reset to a known state.
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_NAME));
-    let _ = cave::with_cave_active(kns_id,    || batfs::ns_delete(FILE_NAME));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE_NAME));
+    let _ = cave::with_cave_active(kns_id,    || sealfs::ns_delete(FILE_NAME));
     let _ = cave::set_sensitivity_by_name("sys-wg",   Sensitivity::Secret);
     let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
 
     // sys-wg (Secret) creates a file. It should stamp at Secret.
     if let Err(e) = cave::with_cave_active(sys_wg_id, ||
-        batfs::ns_create(FILE_NAME, b"classified-payload")
+        sealfs::ns_create(FILE_NAME, b"classified-payload")
     ) {
         console::puts("  ✗ FAIL: sys-wg ns_create: "); console::puts(e); console::puts("\n");
         let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
@@ -8268,13 +8268,13 @@ fn cmd_mls_selftest() {
 
     // sys-wg reading its own file: read-equal -> ALLOW.
     let mut buf = [0u8; 64];
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE_NAME, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE_NAME, &mut buf)) {
         Ok(n) if &buf[..n] == b"classified-payload" => {
             console::puts("  ✓ sys-wg (S) reads own S file (read-equal) -> ALLOW\n");
         }
         _ => {
             console::puts("  ✗ FAIL: sys-wg can't read its own file\n");
-            let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_NAME));
+            let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE_NAME));
             let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
             return;
         }
@@ -8286,12 +8286,12 @@ fn cmd_mls_selftest() {
     // path. The mount-ns isolation already blocks this, but to
     // exercise MLS specifically, attempt to create a Secret-stamped
     // file in kernel-ns context and verify it stamps Unclassified.
-    let _ = cave::with_cave_active(kns_id, || batfs::ns_delete(FILE_NAME));
+    let _ = cave::with_cave_active(kns_id, || sealfs::ns_delete(FILE_NAME));
     if let Err(e) = cave::with_cave_active(kns_id, ||
-        batfs::ns_create(FILE_NAME, b"low-payload")
+        sealfs::ns_create(FILE_NAME, b"low-payload")
     ) {
         console::puts("  ✗ FAIL: kernel-ns ns_create: "); console::puts(e); console::puts("\n");
-        let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_NAME));
+        let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE_NAME));
         let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
         return;
     }
@@ -8301,12 +8301,12 @@ fn cmd_mls_selftest() {
     // Secret file; create a fresh Secret file then drop kernel-ns
     // back to Unclassified; reading must now fail with no-read-up.
     let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Secret);
-    let _ = cave::with_cave_active(kns_id, || batfs::ns_delete(FILE_NAME));
+    let _ = cave::with_cave_active(kns_id, || sealfs::ns_delete(FILE_NAME));
     if let Err(e) = cave::with_cave_active(kns_id, ||
-        batfs::ns_create(FILE_NAME, b"upgraded-payload")
+        sealfs::ns_create(FILE_NAME, b"upgraded-payload")
     ) {
         console::puts("  ✗ FAIL: kernel-ns(S) ns_create: "); console::puts(e); console::puts("\n");
-        let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_NAME));
+        let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE_NAME));
         let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
         let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
         return;
@@ -8314,7 +8314,7 @@ fn cmd_mls_selftest() {
     // Drop the cave's label back to U; the file remains S.
     let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
 
-    match cave::with_cave_active(kns_id, || batfs::ns_read(FILE_NAME, &mut buf)) {
+    match cave::with_cave_active(kns_id, || sealfs::ns_read(FILE_NAME, &mut buf)) {
         Err("mls: no read-up") => {
             console::puts("  ✓ kernel-ns (U) reads its own S file -> DENY (no read-up)\n");
         }
@@ -8322,10 +8322,10 @@ fn cmd_mls_selftest() {
             console::puts("  ✗ FAIL: no-read-up was bypassed\n");
             cave::with_cave_active(kns_id, || {
                 cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Secret).and_then(|_| {
-                    batfs::ns_delete(FILE_NAME).map_err(|_| "")
+                    sealfs::ns_delete(FILE_NAME).map_err(|_| "")
                 }).ok();
             });
-            let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_NAME));
+            let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE_NAME));
             let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
             let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
             return;
@@ -8334,8 +8334,8 @@ fn cmd_mls_selftest() {
             console::puts("  ✗ FAIL: wrong error from no-read-up: ");
             console::puts(e); console::puts("\n");
             let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Secret);
-            let _ = cave::with_cave_active(kns_id, || batfs::ns_delete(FILE_NAME));
-            let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_NAME));
+            let _ = cave::with_cave_active(kns_id, || sealfs::ns_delete(FILE_NAME));
+            let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE_NAME));
             let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
             let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
             return;
@@ -8347,12 +8347,12 @@ fn cmd_mls_selftest() {
     // doesn't enforce that yet — delete is admin-equivalent in our
     // model — but re-elevate anyway for correctness).
     let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Secret);
-    let _ = cave::with_cave_active(kns_id, || batfs::ns_delete(FILE_NAME));
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_NAME));
+    let _ = cave::with_cave_active(kns_id, || sealfs::ns_delete(FILE_NAME));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE_NAME));
     let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
     let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
 
-    console::puts("  ✓ MLS lattice + BatFS file-label no-read-up enforcement verified\n");
+    console::puts("  ✓ MLS lattice + SealFS file-label no-read-up enforcement verified\n");
 }
 
 /// `mls-ipc-selftest` — gov-grade §3.2 labeled IPC slice.
@@ -8493,7 +8493,7 @@ fn cmd_mls_ipc_selftest() {
 }
 
 /// `audit-seal` — write the current chain head + entry count to
-/// BatFS as a 40-byte sealed-checkpoint file. Operator runs this
+/// SealFS as a 40-byte sealed-checkpoint file. Operator runs this
 /// on a cadence (e.g. before every shutdown) so a full-ring rewrite
 /// becomes detectable on the next boot when `audit-seal-verify`
 /// recomputes the live chain against the seal.
@@ -8515,10 +8515,10 @@ fn cmd_audit_seal() {
     }
     let seal = audit_chain::current_seal();
     let bytes = seal.encode();
-    // Admin-context write via the un-prefixed BatFS path — the seal
+    // Admin-context write via the un-prefixed SealFS path — the seal
     // is global, not per-cave.
-    let _ = crate::fs::batfs::delete("audit-chain.seal");
-    match crate::fs::batfs::create("audit-chain.seal", &bytes) {
+    let _ = crate::fs::sealfs::delete("audit-chain.seal");
+    match crate::fs::sealfs::create("audit-chain.seal", &bytes) {
         Ok(()) => {
             console::puts("  audit-seal: wrote seal (count=");
             print_num(seal.count); console::puts(", hash=");
@@ -8536,13 +8536,13 @@ fn cmd_audit_seal() {
     }
 }
 
-/// `audit-seal-verify` — read `audit-chain.seal` back from BatFS
+/// `audit-seal-verify` — read `audit-chain.seal` back from SealFS
 /// and verify it against the live audit ring. Reports Ok,
 /// Mismatch, Truncated, or one of the boundary cases.
 fn cmd_audit_seal_verify() {
     use crate::security::audit_chain::{verify_seal, ChainSeal, SealVerify};
     let mut buf = [0u8; 64];
-    let n = match crate::fs::batfs::read("audit-chain.seal", &mut buf) {
+    let n = match crate::fs::sealfs::read("audit-chain.seal", &mut buf) {
         Ok(n) => n,
         Err(e) => {
             console::puts("  audit-seal-verify: no seal on file (");
@@ -8786,7 +8786,7 @@ fn cmd_integ_show() {
 /// Pins down:
 ///   * `can_flow_integrity` returns the right verdict for all four
 ///     reference cases + the two equal-level cases (6 total).
-///   * End-to-end BatFS: sys-wg labeled SystemTrusted (S/ST)
+///   * End-to-end SealFS: sys-wg labeled SystemTrusted (S/ST)
 ///     creates a file (stamped ST). kernel-ns at SystemTrusted
 ///     reads it OK; kernel-ns elevated to HighIntegrity then
 ///     refuses to read the ST file with `mls: no read-down`.
@@ -8797,7 +8797,7 @@ fn cmd_biba_selftest() {
     use crate::caves::cave::{self, can_flow_integrity, Integrity, MlsOp, Sensitivity};
     use crate::caves::mls_ipc::{self, MlsIpcError};
     use crate::caves::sys_caves;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
     console::puts_hi("  BIBA INTEGRITY LATTICE SELF-TEST\n");
 
@@ -8837,14 +8837,14 @@ fn cmd_biba_selftest() {
         mls_ipc::drain(sys_wg_id);
         mls_ipc::drain(kns_id);
     };
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete("biba-probe"));
-    let _ = cave::with_cave_active(kns_id,    || batfs::ns_delete("biba-probe"));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete("biba-probe"));
+    let _ = cave::with_cave_active(kns_id,    || sealfs::ns_delete("biba-probe"));
     let _ = cave::set_integrity_by_name("sys-wg",   Integrity::SystemTrusted);
     let _ = cave::set_integrity_by_name("kernel-ns", Integrity::SystemTrusted);
 
-    // ── (2) BatFS: ST cave creates ST file; reading at HI denied ──
+    // ── (2) SealFS: ST cave creates ST file; reading at HI denied ──
     if let Err(e) = cave::with_cave_active(sys_wg_id, ||
-        batfs::ns_create("biba-probe", b"system-data")
+        sealfs::ns_create("biba-probe", b"system-data")
     ) {
         console::puts("  ✗ FAIL: ST ns_create: "); console::puts(e); console::puts("\n");
         cleanup_biba(sys_wg_id, kns_id);
@@ -8853,7 +8853,7 @@ fn cmd_biba_selftest() {
     console::puts("  ✓ sys-wg (ST) created biba-probe (stamped ST)\n");
 
     let mut buf = [0u8; 64];
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read("biba-probe", &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read("biba-probe", &mut buf)) {
         Ok(n) if &buf[..n] == b"system-data" => {
             console::puts("  ✓ sys-wg (ST) reads its own ST file (read-equal) -> ALLOW\n");
         }
@@ -8866,7 +8866,7 @@ fn cmd_biba_selftest() {
     // Elevate sys-wg to HighIntegrity, try to read its OWN ST file
     // — must reject with no-read-down.
     let _ = cave::set_integrity_by_name("sys-wg", Integrity::HighIntegrity);
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read("biba-probe", &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read("biba-probe", &mut buf)) {
         Err("mls: no read-down") => {
             console::puts("  ✓ sys-wg (HI) reads its own ST file -> DENY (no read-down)\n");
         }
@@ -8881,7 +8881,7 @@ fn cmd_biba_selftest() {
     }
     // Restore for cleanup.
     let _ = cave::set_integrity_by_name("sys-wg", Integrity::SystemTrusted);
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete("biba-probe"));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete("biba-probe"));
 
     // ── (3) IPC: Untrusted -> SystemTrusted send is WriteUp ──
     let _ = cave::set_integrity_by_name("kernel-ns", Integrity::Untrusted);
@@ -8927,11 +8927,11 @@ fn cmd_biba_selftest() {
     }
 
     cleanup_biba(sys_wg_id, kns_id);
-    console::puts("  ✓ Biba lattice: BatFS no-read-down + IPC no-write-up / no-read-down verified\n");
+    console::puts("  ✓ Biba lattice: SealFS no-read-down + IPC no-write-up / no-read-down verified\n");
 }
 
 /// `mls-binding-selftest` — gov-grade §3.2 hardening. The MLS
-/// labels stored in `batfs::FileEntry.sensitivity / .integrity`
+/// labels stored in `sealfs::FileEntry.sensitivity / .integrity`
 /// are AEAD-bound into the file's ciphertext (AAD = filename ||
 /// sens || integ). A byte-flip on either label at rest no longer
 /// lets an attacker downgrade a file to bypass `ns_read`'s BLP /
@@ -8951,7 +8951,7 @@ fn cmd_biba_selftest() {
 fn cmd_mls_binding_selftest() {
     use crate::caves::cave::{self, Integrity, Sensitivity};
     use crate::caves::sys_caves;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
     console::puts_hi("  MLS LABEL-AEAD-BINDING SELF-TEST\n");
 
@@ -8962,18 +8962,18 @@ fn cmd_mls_binding_selftest() {
 
     const FILE: &str = "mls-bind-probe";
     let cleanup = |sys_wg_id: u16| {
-        let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE));
+        let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE));
         let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
         let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
     };
 
     // Set distinct labels so any tamper produces a visible diff.
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE));
     let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Secret);
     let _ = cave::set_integrity_by_name("sys-wg",   Integrity::SystemTrusted);
 
     if let Err(e) = cave::with_cave_active(sys_wg_id, ||
-        batfs::ns_create(FILE, b"label-bound-payload")
+        sealfs::ns_create(FILE, b"label-bound-payload")
     ) {
         console::puts("  ✗ FAIL: ns_create: "); console::puts(e); console::puts("\n");
         cleanup(sys_wg_id); return;
@@ -8981,7 +8981,7 @@ fn cmd_mls_binding_selftest() {
     console::puts("  ✓ created (S/ST)-labeled file\n");
 
     let mut buf = [0u8; 64];
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE, &mut buf)) {
         Ok(n) if &buf[..n] == b"label-bound-payload" => {
             console::puts("  ✓ clean ns_read returned plaintext\n");
         }
@@ -8998,33 +8998,33 @@ fn cmd_mls_binding_selftest() {
     let orig_sens  = Sensitivity::Secret as u8;
     let orig_integ = Integrity::SystemTrusted as u8;
     unsafe {
-        batfs::tamper_test_flip_labels(
+        sealfs::tamper_test_flip_labels(
             // The full on-disk name is "sys-wg:mls-bind-probe"
             // because of the mount-ns prefix.
             "sys-wg:mls-bind-probe",
             Sensitivity::Unclassified as u8, orig_integ,
         );
     }
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE, &mut buf)) {
         Err("INTEGRITY VIOLATION — file tampered or label flipped") => {
             console::puts("  ✓ sensitivity tamper -> AEAD refused decrypt\n");
         }
         Ok(_) => {
             console::puts("  ✗ FAIL: downgrade succeeded — labels not AEAD-bound\n");
-            unsafe { batfs::tamper_test_flip_labels(
+            unsafe { sealfs::tamper_test_flip_labels(
                 "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
             cleanup(sys_wg_id); return;
         }
         Err(e) => {
             console::puts("  ✗ FAIL: wrong error on sensitivity tamper: ");
             console::puts(e); console::puts("\n");
-            unsafe { batfs::tamper_test_flip_labels(
+            unsafe { sealfs::tamper_test_flip_labels(
                 "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
             cleanup(sys_wg_id); return;
         }
     }
     // Restore.
-    unsafe { batfs::tamper_test_flip_labels(
+    unsafe { sealfs::tamper_test_flip_labels(
         "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
 
     // Integrity tamper. Drop the file's integ from ST (2) to
@@ -9037,31 +9037,31 @@ fn cmd_mls_binding_selftest() {
     // Actually simpler: drop file.integ to HI (3). Cave at ST=2
     // reads down-to-up? No — cave_integ <= file_integ for Read:
     // 2 <= 3 -> OK. So MLS check passes. AEAD must reject.
-    unsafe { batfs::tamper_test_flip_labels(
+    unsafe { sealfs::tamper_test_flip_labels(
         "sys-wg:mls-bind-probe", orig_sens, Integrity::HighIntegrity as u8); }
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE, &mut buf)) {
         Err("INTEGRITY VIOLATION — file tampered or label flipped") => {
             console::puts("  ✓ integrity tamper -> AEAD refused decrypt\n");
         }
         Ok(_) => {
             console::puts("  ✗ FAIL: integrity upgrade succeeded — labels not AEAD-bound\n");
-            unsafe { batfs::tamper_test_flip_labels(
+            unsafe { sealfs::tamper_test_flip_labels(
                 "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
             cleanup(sys_wg_id); return;
         }
         Err(e) => {
             console::puts("  ✗ FAIL: wrong error on integ tamper: ");
             console::puts(e); console::puts("\n");
-            unsafe { batfs::tamper_test_flip_labels(
+            unsafe { sealfs::tamper_test_flip_labels(
                 "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
             cleanup(sys_wg_id); return;
         }
     }
-    unsafe { batfs::tamper_test_flip_labels(
+    unsafe { sealfs::tamper_test_flip_labels(
         "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
 
     // After full restore, the read recovers.
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE, &mut buf)) {
         Ok(n) if &buf[..n] == b"label-bound-payload" => {
             console::puts("  ✓ post-restore ns_read recovered plaintext\n");
         }
@@ -9600,7 +9600,7 @@ fn cmd_secmark_recv_selftest() {
 fn cmd_te_obj_selftest() {
     use crate::caves::cave::{self, ObjOp};
     use crate::caves::sys_caves;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
 
     console::puts_hi("  TE-ON-OBJECTS POLICY SELF-TEST\n");
 
@@ -9613,26 +9613,26 @@ fn cmd_te_obj_selftest() {
     const OBJ_TYPE: u8 = 42;
 
     let cleanup = |sys_wg_id: u16| {
-        let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE));
+        let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE));
         cave::clear_object_rules();
     };
 
     cave::clear_object_rules();
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE));
 
     // (1) Create file, retag it.
     if let Err(e) = cave::with_cave_active(sys_wg_id, ||
-        batfs::ns_create(FILE, b"obj-typed-payload")
+        sealfs::ns_create(FILE, b"obj-typed-payload")
     ) {
         console::puts("  ✗ FAIL: ns_create: "); console::puts(e); console::puts("\n");
         cleanup(sys_wg_id); return;
     }
-    let tagged = cave::with_cave_active(sys_wg_id, || batfs::set_obj_type(FILE, OBJ_TYPE));
+    let tagged = cave::with_cave_active(sys_wg_id, || sealfs::set_obj_type(FILE, OBJ_TYPE));
     if !tagged {
         console::puts("  ✗ FAIL: set_obj_type returned false\n");
         cleanup(sys_wg_id); return;
     }
-    let read_back = cave::with_cave_active(sys_wg_id, || batfs::obj_type_of(FILE));
+    let read_back = cave::with_cave_active(sys_wg_id, || sealfs::obj_type_of(FILE));
     if read_back != Some(OBJ_TYPE) {
         console::puts("  ✗ FAIL: obj_type round trip\n");
         cleanup(sys_wg_id); return;
@@ -9641,7 +9641,7 @@ fn cmd_te_obj_selftest() {
 
     // (2) Default policy: read OK.
     let mut buf = [0u8; 64];
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE, &mut buf)) {
         Ok(n) if &buf[..n] == b"obj-typed-payload" => {
             console::puts("  ✓ default policy: sys-wg ns_read passed\n");
         }
@@ -9656,7 +9656,7 @@ fn cmd_te_obj_selftest() {
         console::puts("  ✗ FAIL: deny_object_op: "); console::puts(e); console::puts("\n");
         cleanup(sys_wg_id); return;
     }
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE, &mut buf)) {
         Err("te-obj: read denied by policy") => {
             console::puts("  ✓ deny rule: sys-wg ns_read -> DENY (te-obj policy)\n");
         }
@@ -9688,7 +9688,7 @@ fn cmd_te_obj_selftest() {
 
     // (5) allow_object_op restores access.
     cave::allow_object_op(sys_wg_id, OBJ_TYPE);
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE, &mut buf)) {
         Ok(_) => console::puts("  ✓ allow_object_op restored sys-wg read access\n"),
         Err(e) => {
             console::puts("  ✗ FAIL: post-allow read: "); console::puts(e); console::puts("\n");
@@ -10036,7 +10036,7 @@ fn cmd_audit_seal_tpi_selftest() {
 
     // Start clean — no carry-over from earlier tests.
     tpi::reset_for_test();
-    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    let _ = crate::fs::sealfs::delete("audit-chain.seal");
 
     let mut seed_a = [0u8; 32];
     let mut seed_b = [0u8; 32];
@@ -10059,13 +10059,13 @@ fn cmd_audit_seal_tpi_selftest() {
     console::puts("  ✓ enforcement_active after registering audit+crypto officers\n");
 
     // (2) No approval yet -> cmd_audit_seal should refuse.
-    // We detect "refused" by checking that the BatFS file
+    // We detect "refused" by checking that the SealFS file
     // `audit-chain.seal` was NOT created.
-    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    let _ = crate::fs::sealfs::delete("audit-chain.seal");
     cmd_audit_seal();
     // If the file exists now, the gate didn't fire.
     let mut tmp = [0u8; 64];
-    if crate::fs::batfs::read("audit-chain.seal", &mut tmp).is_ok() {
+    if crate::fs::sealfs::read("audit-chain.seal", &mut tmp).is_ok() {
         console::puts("  ✗ FAIL: audit-seal wrote seal without TPI approval\n");
         tpi::reset_for_test(); return;
     }
@@ -10094,9 +10094,9 @@ fn cmd_audit_seal_tpi_selftest() {
     console::puts("  ✓ quorum approved; 1 pending grant in ring\n");
 
     // (5) audit-seal should now succeed — consumes the grant.
-    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    let _ = crate::fs::sealfs::delete("audit-chain.seal");
     cmd_audit_seal();
-    if crate::fs::batfs::read("audit-chain.seal", &mut tmp).is_err() {
+    if crate::fs::sealfs::read("audit-chain.seal", &mut tmp).is_err() {
         console::puts("  ✗ FAIL: audit-seal didn't write seal after TPI approval\n");
         tpi::reset_for_test(); return;
     }
@@ -10107,16 +10107,16 @@ fn cmd_audit_seal_tpi_selftest() {
     console::puts("  ✓ audit-seal ran with TPI approval; seal file present; grant consumed\n");
 
     // (6) Second audit-seal must fail — grant was one-shot.
-    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    let _ = crate::fs::sealfs::delete("audit-chain.seal");
     cmd_audit_seal();
-    if crate::fs::batfs::read("audit-chain.seal", &mut tmp).is_ok() {
+    if crate::fs::sealfs::read("audit-chain.seal", &mut tmp).is_ok() {
         console::puts("  ✗ FAIL: second audit-seal succeeded without fresh quorum\n");
         tpi::reset_for_test(); return;
     }
     console::puts("  ✓ second audit-seal -> blocked; grants are one-shot\n");
 
     tpi::reset_for_test();
-    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    let _ = crate::fs::sealfs::delete("audit-chain.seal");
     console::puts("  ✓ TPI is load-bearing for audit-seal: quorum required, one-shot consume\n");
 }
 
@@ -10164,7 +10164,7 @@ fn cmd_mls_declassify(file: &str, sens: &str, integ: &str) {
         console::puts("  mls-declassify: TPI quorum required (no fresh approval)\n");
         return;
     }
-    match crate::fs::batfs::declassify(file, s as u8, i as u8) {
+    match crate::fs::sealfs::declassify(file, s as u8, i as u8) {
         Ok(_) => {
             console::puts("  mls-declassify: ");
             console::puts(file);
@@ -10186,7 +10186,7 @@ fn cmd_mls_declassify(file: &str, sens: &str, integ: &str) {
 fn cmd_tpi_wired_ops_selftest() {
     use crate::caves::cave::{self, Integrity, Sensitivity};
     use crate::caves::sys_caves;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     use crate::security::{audit, audit::Category, tpi, tpi::{canonical_bytes, OpId, Role}};
     use ed25519_compact::{KeyPair, Seed};
 
@@ -10266,9 +10266,9 @@ fn cmd_tpi_wired_ops_selftest() {
     let _ = cave::set_integrity_by_name("sys-wg",   Integrity::SystemTrusted);
     const FILE_BARE: &str = "declass-probe";
     const FILE_FQN:  &str = "sys-wg:declass-probe";
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_BARE));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(FILE_BARE));
     if let Err(e) = cave::with_cave_active(sys_wg_id, ||
-        batfs::ns_create(FILE_BARE, b"declassify-payload")
+        sealfs::ns_create(FILE_BARE, b"declassify-payload")
     ) {
         console::puts("  ✗ FAIL: ns_create: "); console::puts(e); console::puts("\n");
         let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
@@ -10279,7 +10279,7 @@ fn cmd_tpi_wired_ops_selftest() {
     cmd_mls_declassify(FILE_FQN, "u", "u");
     // After refusal the file should still be S/ST.
     let mut buf = [0u8; 64];
-    let r = cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE_BARE, &mut buf));
+    let r = cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE_BARE, &mut buf));
     if r.is_err() {
         console::puts("  ✗ FAIL: cave can't read its own file after blocked declassify\n");
         cleanup_declassify(sys_wg_id);
@@ -10296,7 +10296,7 @@ fn cmd_tpi_wired_ops_selftest() {
     // Now drop sys-wg's labels to U/U and confirm we can read.
     let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
     let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
-    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE_BARE, &mut buf)) {
+    match cave::with_cave_active(sys_wg_id, || sealfs::ns_read(FILE_BARE, &mut buf)) {
         Ok(n) if &buf[..n] == b"declassify-payload" => {
             console::puts("  ✓ mls-declassify with approval -> file readable at U/U\n");
         }
@@ -10497,7 +10497,7 @@ fn cmd_exec_trans_list() {
     }
 }
 
-/// `exec-file <filename>` — "execute" a BatFS file with SELinux
+/// `exec-file <filename>` — "execute" a SealFS file with SELinux
 /// `domain_auto_trans` semantics: the file is LOOKED UP in the
 /// caller's namespace (existing mount-prefix semantics), and if a
 /// transition rule is registered for that filename the active
@@ -10508,7 +10508,7 @@ fn cmd_exec_trans_list() {
 /// primitive (the policy-gated transition) is exercised end-to-end.
 fn cmd_exec_file(filename: &str) {
     use crate::caves::cave;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     if filename.is_empty() {
         console::puts("  usage: exec-file <filename>\n");
         return;
@@ -10517,7 +10517,7 @@ fn cmd_exec_file(filename: &str) {
     // resolved under the parent's mount namespace; the new domain
     // only takes effect AFTER lookup succeeds.
     let mut payload = [0u8; 256];
-    let n = match batfs::ns_read(filename, &mut payload) {
+    let n = match sealfs::ns_read(filename, &mut payload) {
         Ok(n) => n,
         Err(e) => { console::puts("  exec-file: "); console::puts(e); console::puts("\n"); return; }
     };
@@ -10572,7 +10572,7 @@ fn cmd_exec_file(filename: &str) {
 fn cmd_exec_trans_selftest() {
     use crate::caves::cave;
     use crate::caves::sys_caves;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     console::puts_hi("  EXEC AUTO-TRANSITION SELF-TEST\n");
 
     let sys_wg_id = match sys_caves::sys_wg_id() {
@@ -10586,8 +10586,8 @@ fn cmd_exec_trans_selftest() {
     const FILE: &str = "exec-trans-probe";
     // Provision the binary at a kernel-context-visible path so the
     // exec-file lookup (in caller's namespace = kernel) finds it.
-    let _ = batfs::ns_delete(FILE);
-    if let Err(e) = batfs::ns_create(FILE, b"go") {
+    let _ = sealfs::ns_delete(FILE);
+    if let Err(e) = sealfs::ns_create(FILE, b"go") {
         console::puts("  ✗ FAIL: ns_create: "); console::puts(e); console::puts("\n");
         return;
     }
@@ -10601,7 +10601,7 @@ fn cmd_exec_trans_selftest() {
         console::puts("  ✗ FAIL: set_exec_transition: ");
         console::puts(e); console::puts("\n");
         cave::te_disable();
-        let _ = batfs::ns_delete(FILE);
+        let _ = sealfs::ns_delete(FILE);
         return;
     }
     match cave::lookup_exec_transition(FILE) {
@@ -10612,7 +10612,7 @@ fn cmd_exec_trans_selftest() {
             console::puts("  ✗ FAIL: lookup_exec_transition didn't return sys_wg_id\n");
             cave::clear_all_exec_transitions();
             cave::te_disable();
-            let _ = batfs::ns_delete(FILE);
+            let _ = sealfs::ns_delete(FILE);
             return;
         }
     }
@@ -10624,7 +10624,7 @@ fn cmd_exec_trans_selftest() {
         console::puts("  ✗ FAIL: TE allowed kns -> sys-wg with no rule\n");
         cave::clear_all_exec_transitions();
         cave::te_disable();
-        let _ = batfs::ns_delete(FILE);
+        let _ = sealfs::ns_delete(FILE);
         return;
     }
     console::puts("  ✓ no allow rule -> kns cannot transition to sys-wg\n");
@@ -10634,7 +10634,7 @@ fn cmd_exec_trans_selftest() {
         console::puts(e); console::puts("\n");
         cave::clear_all_exec_transitions();
         cave::te_disable();
-        let _ = batfs::ns_delete(FILE);
+        let _ = sealfs::ns_delete(FILE);
         return;
     }
     if !cave::can_transition(kns_id as usize, sys_wg_id) {
@@ -10642,7 +10642,7 @@ fn cmd_exec_trans_selftest() {
         cave::clear_transition_rules();
         cave::clear_all_exec_transitions();
         cave::te_disable();
-        let _ = batfs::ns_delete(FILE);
+        let _ = sealfs::ns_delete(FILE);
         return;
     }
     console::puts("  ✓ with allow rule -> kns can transition to sys-wg\n");
@@ -10655,7 +10655,7 @@ fn cmd_exec_trans_selftest() {
     cave::clear_transition_rules();
     cave::clear_all_exec_transitions();
     cave::te_disable();
-    let _ = batfs::ns_delete(FILE);
+    let _ = sealfs::ns_delete(FILE);
     console::puts("  ✓ exec-trans-selftest PASS\n");
 }
 
@@ -10674,7 +10674,7 @@ fn parse_taint(s: &str) -> Result<u32, &'static str> {
 /// reads of this file by any cave will OR these bits into the
 /// reader cave's taint.
 fn cmd_taint_stamp(filename: &str, bits_str: &str) {
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     if filename.is_empty() || bits_str.is_empty() {
         console::puts("  usage: taint-stamp <filename> <bits>\n");
         return;
@@ -10683,7 +10683,7 @@ fn cmd_taint_stamp(filename: &str, bits_str: &str) {
         Ok(b) => b,
         Err(e) => { console::puts("  "); console::puts(e); console::puts("\n"); return; }
     };
-    match batfs::set_file_taint(filename, bits) {
+    match sealfs::set_file_taint(filename, bits) {
         Ok(()) => {
             console::puts("  taint-stamp: ");
             console::puts(filename);
@@ -10697,12 +10697,12 @@ fn cmd_taint_stamp(filename: &str, bits_str: &str) {
 
 /// `taint-show <filename>` — print the taint bitmap on a file.
 fn cmd_taint_show(filename: &str) {
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     if filename.is_empty() {
         console::puts("  usage: taint-show <filename>\n");
         return;
     }
-    let bits = batfs::file_taint(filename);
+    let bits = sealfs::file_taint(filename);
     console::puts("  taint-show: ");
     console::puts(filename);
     console::puts(" = ");
@@ -10738,10 +10738,10 @@ fn cmd_taint_cave_show(cave_name: &str) {
 /// after a containment incident is closed out.
 fn cmd_taint_reset() {
     use crate::caves::cave;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     use crate::security::audit::{record, Category};
     cave::clear_all_taints();
-    batfs::clear_all_file_taints();
+    sealfs::clear_all_file_taints();
     record(Category::Cave, b"taint-reset: all cave + file taints cleared");
     console::puts("  taint-reset: all cave + file taints cleared\n");
 }
@@ -10756,7 +10756,7 @@ fn cmd_taint_reset() {
 fn cmd_taint_selftest() {
     use crate::caves::cave;
     use crate::caves::sys_caves;
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     console::puts_hi("  TAINT PROPAGATION SELF-TEST\n");
 
     let sys_wg_id = match sys_caves::sys_wg_id() {
@@ -10764,26 +10764,26 @@ fn cmd_taint_selftest() {
         None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
     };
     cave::clear_all_taints();
-    batfs::clear_all_file_taints();
+    sealfs::clear_all_file_taints();
     const SRC: &str = "taint-src";
     const DST: &str = "taint-dst";
 
     // Provision: source file in sys-wg's namespace; we'll stamp it.
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(SRC));
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(DST));
-    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(SRC, b"secret")) {
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(SRC));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(DST));
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || sealfs::ns_create(SRC, b"secret")) {
         console::puts("  ✗ FAIL: ns_create SRC: "); console::puts(e); console::puts("\n");
         return;
     }
     // Admin stamps PII (bit 0) on sys-wg:taint-src.
-    if let Err(e) = batfs::set_file_taint("sys-wg:taint-src", 0x01) {
+    if let Err(e) = sealfs::set_file_taint("sys-wg:taint-src", 0x01) {
         console::puts("  ✗ FAIL: set_file_taint: "); console::puts(e); console::puts("\n");
-        let _ = batfs::ns_delete("sys-wg:taint-src");
+        let _ = sealfs::ns_delete("sys-wg:taint-src");
         return;
     }
-    if batfs::file_taint("sys-wg:taint-src") != 0x01 {
+    if sealfs::file_taint("sys-wg:taint-src") != 0x01 {
         console::puts("  ✗ FAIL: stamp didn't persist\n");
-        let _ = batfs::ns_delete("sys-wg:taint-src");
+        let _ = sealfs::ns_delete("sys-wg:taint-src");
         return;
     }
     console::puts("  ✓ taint-stamp persists\n");
@@ -10791,49 +10791,49 @@ fn cmd_taint_selftest() {
     // ── 2. sys-wg reads SRC -> sys-wg inherits taint.
     if cave::taint_of(sys_wg_id) != 0 {
         console::puts("  ✗ FAIL: sys-wg started with non-zero taint\n");
-        let _ = batfs::ns_delete("sys-wg:taint-src");
+        let _ = sealfs::ns_delete("sys-wg:taint-src");
         return;
     }
     let mut buf = [0u8; 32];
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_read(SRC, &mut buf));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_read(SRC, &mut buf));
     if cave::taint_of(sys_wg_id) != 0x01 {
         console::puts("  ✗ FAIL: read didn't propagate taint to sys-wg, got ");
         print_hex32(cave::taint_of(sys_wg_id));
         console::puts("\n");
-        let _ = batfs::ns_delete("sys-wg:taint-src");
+        let _ = sealfs::ns_delete("sys-wg:taint-src");
         return;
     }
     console::puts("  ✓ ns_read -> reader inherits file taint\n");
 
     // ── 3. sys-wg writes DST -> DST inherits cave's taint.
-    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(DST, b"derived")) {
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || sealfs::ns_create(DST, b"derived")) {
         console::puts("  ✗ FAIL: ns_create DST: "); console::puts(e); console::puts("\n");
-        cave::clear_all_taints(); batfs::clear_all_file_taints();
-        let _ = batfs::ns_delete("sys-wg:taint-src");
+        cave::clear_all_taints(); sealfs::clear_all_file_taints();
+        let _ = sealfs::ns_delete("sys-wg:taint-src");
         return;
     }
-    if batfs::file_taint("sys-wg:taint-dst") != 0x01 {
+    if sealfs::file_taint("sys-wg:taint-dst") != 0x01 {
         console::puts("  ✗ FAIL: write didn't propagate taint to file, got ");
-        print_hex32(batfs::file_taint("sys-wg:taint-dst"));
+        print_hex32(sealfs::file_taint("sys-wg:taint-dst"));
         console::puts("\n");
-        cave::clear_all_taints(); batfs::clear_all_file_taints();
-        let _ = batfs::ns_delete("sys-wg:taint-src");
-        let _ = batfs::ns_delete("sys-wg:taint-dst");
+        cave::clear_all_taints(); sealfs::clear_all_file_taints();
+        let _ = sealfs::ns_delete("sys-wg:taint-src");
+        let _ = sealfs::ns_delete("sys-wg:taint-dst");
         return;
     }
     console::puts("  ✓ ns_create -> sink inherits writer taint\n");
 
     // ── 4. Monotonic: reading an untainted file leaves taint alone.
     const PLAIN: &str = "taint-plain";
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(PLAIN));
-    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(PLAIN, b"clean")) {
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete(PLAIN));
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || sealfs::ns_create(PLAIN, b"clean")) {
         console::puts("  ✗ FAIL: ns_create PLAIN: "); console::puts(e); console::puts("\n");
     }
     // sys-wg's taint is still 0x01 after the write because the
     // write inherits the cave's taint, not the other way around.
     // Now read the freshly-created plain file (no stamp); the
     // cave's taint must stay 0x01 (not regress to 0).
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_read(PLAIN, &mut buf));
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_read(PLAIN, &mut buf));
     if cave::taint_of(sys_wg_id) != 0x01 {
         console::puts("  ✗ FAIL: taint regressed on untainted read, got ");
         print_hex32(cave::taint_of(sys_wg_id));
@@ -10844,21 +10844,21 @@ fn cmd_taint_selftest() {
 
     // ── Cleanup ───────────────────────────────────────────────
     cave::clear_all_taints();
-    batfs::clear_all_file_taints();
-    let _ = batfs::ns_delete("sys-wg:taint-src");
-    let _ = batfs::ns_delete("sys-wg:taint-dst");
-    let _ = batfs::ns_delete("sys-wg:taint-plain");
+    sealfs::clear_all_file_taints();
+    let _ = sealfs::ns_delete("sys-wg:taint-src");
+    let _ = sealfs::ns_delete("sys-wg:taint-dst");
+    let _ = sealfs::ns_delete("sys-wg:taint-plain");
     console::puts("  ✓ taint-selftest PASS\n");
 }
 
 fn cleanup_declassify(sys_wg_id: u16) {
     use crate::caves::cave::{self, Integrity, Sensitivity};
-    use crate::fs::batfs;
+    use crate::fs::sealfs;
     // Try both names — after declassify the file's still under
     // "sys-wg:declass-probe", but the sys-wg-context delete also
     // resolves it via ns_compose. Belt and braces.
-    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete("declass-probe"));
-    let _ = batfs::ns_delete("sys-wg:declass-probe");
+    let _ = cave::with_cave_active(sys_wg_id, || sealfs::ns_delete("declass-probe"));
+    let _ = sealfs::ns_delete("sys-wg:declass-probe");
     let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
     let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
 }
@@ -10964,7 +10964,7 @@ fn cmd_attest_smoke() {
 }
 
 /// SP-ATT-001 (2026-05-16): produce a Quote for the active cave and
-/// dump the wire-format bytes to BatFS at `attest-quote.bin`. The
+/// dump the wire-format bytes to SealFS at `attest-quote.bin`. The
 /// external verifier (`tools/attest-verifier/attest_verifier.py`)
 /// reads this file, parses the wire format, structurally validates
 /// fields, and (if pqcrypto-mldsa is installed) cryptographically
@@ -10984,13 +10984,13 @@ fn cmd_attest_dump() {
         Err(e) => { console::puts("  attest-dump: quote failed: "); console::puts(e); console::puts("\n"); return; }
     };
     let wire = q.to_wire();
-    match crate::fs::batfs::create("attest-quote.bin", &wire) {
+    match crate::fs::sealfs::create("attest-quote.bin", &wire) {
         Ok(()) => {
             console::puts("  attest-dump: wrote attest-quote.bin (");
             print_num(wire.len());
             console::puts(" bytes)\n");
         }
-        Err(e) => { console::puts("  attest-dump: batfs create failed: "); console::puts(e); console::puts("\n"); }
+        Err(e) => { console::puts("  attest-dump: sealfs create failed: "); console::puts(e); console::puts("\n"); }
     }
 }
 
@@ -11199,7 +11199,7 @@ fn cmd_crl(sub: &str, arg2: &str, arg3: &str) {
     }
 }
 
-/// Hash a BatFS file with one of the supported algorithms. The
+/// Hash a SealFS file with one of the supported algorithms. The
 /// crypto stack additions from cluster A are surfaced here so the
 /// operator can sanity-check file integrity.
 ///
@@ -11213,7 +11213,7 @@ fn cmd_hash(algo: &str, path: &str) {
         return;
     }
     let mut file_buf = [0u8; 65536];
-    let n = match crate::fs::batfs::ns_read(path, &mut file_buf) {
+    let n = match crate::fs::sealfs::ns_read(path, &mut file_buf) {
         Ok(n) => n,
         Err(e) => {
             console::puts("  hash: read failed: ");

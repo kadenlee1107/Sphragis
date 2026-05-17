@@ -12,8 +12,8 @@
 //! transport state. The cave's address space exists from boot
 //! onward; Arc 3 relocates the WireGuard library code into it.
 //!
-//! Build ordering: must run AFTER `fs::batfs::init` (because
-//! `cave::create` derives `fs_key` from the BatFS master key) and
+//! Build ordering: must run AFTER `fs::sealfs::init` (because
+//! `cave::create` derives `fs_key` from the SealFS master key) and
 //! AFTER `security::auth::init` (because the master key isn't
 //! valid until the operator's passphrase has been mixed in). Hence
 //! the call site lives in `main.rs` between the auth-init step

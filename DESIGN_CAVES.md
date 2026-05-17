@@ -69,7 +69,7 @@
    is queued as a future STUMP — the capability infrastructure (`cave::has_cap`,
    `grant_cap`/`revoke_cap`) is solid; the call-site coverage isn't.
 3. **Filesystem encryption** — per-Cave derived encryption key (HMAC-SHA256
-   of the BatFS master keyed by cave name, STUMP #111 audit C011). Destroy key
+   of the SealFS master keyed by cave name, STUMP #111 audit C011). Destroy key
    = data unrecoverable. Master is Argon2id-derived from the boot passphrase
    (STUMP #138).
 4. **Network firewall** — all traffic through allowlist firewall + secure
@@ -122,8 +122,8 @@ caves seal <name>          # persistent → ephemeral (one-way, irreversible)
 ### Persistence implementation (STUMP #135)
 
 The "survives reboots" guarantee is implemented in `src/caves/persist.rs`.
-Each Persistent cave is mirrored to BatFS as a `__cave__<name>` manifest
-file (encrypted by BatFS itself with the boot master key). The manifest
+Each Persistent cave is mirrored to SealFS as a `__cave__<name>` manifest
+file (encrypted by SealFS itself with the boot master key). The manifest
 captures the exact subset of `Cave` state that needs to survive:
 
 - name, cave_type, backing (Native/Docker), image (for Docker)
@@ -133,7 +133,7 @@ Fields that DO NOT persist (re-derived/re-allocated each boot):
 
 - `state` — caves wake up `Stopped`; running state is process-level
 - `fs_key` — deterministic from `(boot master_key, name)`, so the
-  cave's existing BatFS data still decrypts after restore
+  cave's existing SealFS data still decrypts after restore
 - `display_x/y/w/h` — re-allocated by `caves enter`
 
 Mutation hooks: `create`, `create_docker`, `grant_cap`, `revoke_cap`,
@@ -143,10 +143,10 @@ and `destroy` call `persist::delete()`. `destroy_all` (deadman / duress
 — a wipe must take out the registry too, otherwise the next boot
 resurrects everything.
 
-`cave::init` calls `persist::restore_all()` after `batfs::init`
+`cave::init` calls `persist::restore_all()` after `sealfs::init`
 unlocks the filesystem with the operator passphrase. Each manifest
 that decrypts cleanly (Poly1305 tag matches) is reinstalled into a
-free `CAVES[]` slot. Tampered manifests are silently skipped — BatFS
+free `CAVES[]` slot. Tampered manifests are silently skipped — SealFS
 returns `INTEGRITY VIOLATION` and the entry stays out.
 
 ### Anti-coercion property of seal

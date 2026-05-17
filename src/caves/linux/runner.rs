@@ -87,7 +87,7 @@ fn run_small_elf(elf_data: &[u8], name: &str) -> Result<(), &'static str> {
     // cave's quota up front. Quota 0 = unlimited, so default
     // caves are unaffected; an admin-tightened cave that's over
     // its limit gets the same `cave: memory quota exceeded`
-    // error string shm / pipe / batfs already use.
+    // error string shm / pipe / sealfs already use.
     crate::caves::cave::active_charge_pages(5)?;
 
     let code_page = match frame::alloc_frame() {

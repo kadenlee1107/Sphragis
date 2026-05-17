@@ -49,7 +49,7 @@ Ported to Rust as STUMP #125:
 - **`src/ui/apps/security.rs`** — rewritten. ACTIVE CAVES
   iterates `cave::list`, decodes capability flags into the
   NET/RAW/DSP/FS pill set. SECURITY PIPELINE reads TLS mode
-  live. INTEGRITY pulls the BatFS Merkle root, formats first 8
+  live. INTEGRITY pulls the SealFS Merkle root, formats first 8
   bytes as 4-group hex, and ends with a 4-line audit mini-strip
   that mirrors the lock-screen boot log.
 

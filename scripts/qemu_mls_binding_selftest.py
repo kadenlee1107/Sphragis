@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Headless smoke for `mls-binding-selftest` — gov-grade §3.2
-hardening: MLS labels are now AEAD-bound into BatFS ciphertext,
+hardening: MLS labels are now AEAD-bound into SealFS ciphertext,
 so any byte-flip of `sensitivity` or `integrity` at rest is
 rejected at decrypt time (the AAD at read no longer matches the
 AAD at encrypt)."""

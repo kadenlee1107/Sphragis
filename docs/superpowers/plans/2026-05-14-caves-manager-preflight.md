@@ -44,10 +44,10 @@ Both follow the same pattern as `set_sensitivity_by_name` / `sensitivity_of`.
 
 - Grep (`grep -nE 'set_mount|mount_override|cave_mount' src/caves/cave.rs`): zero results.
 - `Cave` struct has no `mount_override` field.
-- The mount concept in `cave.rs` is the **namespace prefix** used by BatFS: `active_mount_prefix()` (line 983) concatenates the cave name with `:` to scope per-cave file keys. It is derived from the cave name at access time — there is no configurable override and no stored mount path field.
+- The mount concept in `cave.rs` is the **namespace prefix** used by SealFS: `active_mount_prefix()` (line 983) concatenates the cave name with `:` to scope per-cave file keys. It is derived from the cave name at access time — there is no configurable override and no stored mount path field.
 - `create()` (line 1287) sets `name`, `sensitivity`, `integrity`, memory quota, `fs_key` — no mount path is written.
 
-**Decision rationale:** Mount scoping is implicit-by-name, not a stored editable field. Adding `mount_override` would require threaded changes in `active_mount_prefix()` and BatFS key derivation, which is out of scope for Wave 3. The Configure form should show MOUNT as `<cave-name>:` (derived display) with no edit widget.
+**Decision rationale:** Mount scoping is implicit-by-name, not a stored editable field. Adding `mount_override` would require threaded changes in `active_mount_prefix()` and SealFS key derivation, which is out of scope for Wave 3. The Configure form should show MOUNT as `<cave-name>:` (derived display) with no edit widget.
 
 **Implications for Task 2:** Nothing to add to the kernel. Task 12 (Configure form apply): skip the MOUNT field entirely — mark it visually as read-only/derived in the form design.
 
@@ -72,7 +72,7 @@ Both follow the same pattern as `set_sensitivity_by_name` / `sensitivity_of`.
 | `add_taint` | `pub fn add_taint(cave_id: u16, bits: u32)` | OR-accumulates, idempotent |
 | `set_taint` | `pub fn set_taint(cave_id: u16, bits: u32)` | clobbers; admin-only path |
 | `active_taint` | `pub fn active_taint() -> u32` | current cave |
-| `active_add_taint` | `pub fn active_add_taint(bits: u32)` | called from `batfs::ns_read` |
+| `active_add_taint` | `pub fn active_add_taint(bits: u32)` | called from `sealfs::ns_read` |
 | `clear_all_taints` | `pub fn clear_all_taints()` | selftest + admin reset-all |
 
 The spec mentions `taint::stamp(cave_id, value)` — this does **not match** any actual function name. The correct setter is `cave::set_taint(cave_id: u16, bits: u32)` (no return value, `-> ()`). Tasks 11 and 12 must call `cave::set_taint`, not `taint::stamp`.
@@ -96,9 +96,9 @@ Taint is stored in a **side-table** `static CAVE_TAINT: [AtomicU32; MAX_CAVES]` 
 
 - Grep (`grep -nE 'pub fn rename|set_name|cave_rename' src/caves/cave.rs`): zero results.
 - No rename API exists anywhere in `src/caves/`.
-- `find_id`, `find_mut`, and all internal lookups key on `name_str()` equality; a rename would require a table walk + BatFS manifest re-write + re-key of `fs_key`.
+- `find_id`, `find_mut`, and all internal lookups key on `name_str()` equality; a rename would require a table walk + SealFS manifest re-write + re-key of `fs_key`.
 
-**Decision rationale:** No API exists; adding one is non-trivial (BatFS persistence, audit record, potential active-cave guard). Spec already anticipated this — "Rename cave (depends on kernel API)" is listed under §"What's NOT in v1". No change.
+**Decision rationale:** No API exists; adding one is non-trivial (SealFS persistence, audit record, potential active-cave guard). Spec already anticipated this — "Rename cave (depends on kernel API)" is listed under §"What's NOT in v1". No change.
 
 **Implications for Task 2:** Nothing to add.
 
@@ -155,7 +155,7 @@ Complete fields of `pub struct Cave` (lines 83–160 of `src/caves/cave.rs`), fo
 | `tool_count` | `usize` | pub direct | |
 | `caps` | `[CaveCap; MAX_CAPS]` | pub direct | not needed by caves_mgr TUI |
 | `cap_count` | `usize` | pub direct | |
-| `fs_key` | `[u8; 32]` | pub direct | never display; used by BatFS only |
+| `fs_key` | `[u8; 32]` | pub direct | never display; used by SealFS only |
 | `display_x/y/w/h` | `u32` | pub direct | display sandbox allocation |
 | `backing` | `CaveBacking` | pub direct | `Native / Docker` |
 | `image` | `[u8; MAX_IMAGE]` | pub direct | use `.image_str()` for `&str` |
@@ -195,7 +195,7 @@ Helper functions in `cave.rs` available to Tasks 10–12:
 | Gap | Resolution | One-liner |
 |-----|------------|-----------|
 | 1 NET MODE | STUB IN TASK 2 | No per-cave NetMode exists; add enum + field + two setters |
-| 2 MOUNT editing | DEFER TO WAVE 4+ | Mount is implicit-by-name (BatFS prefix); no editable field; form shows read-only derived value |
+| 2 MOUNT editing | DEFER TO WAVE 4+ | Mount is implicit-by-name (SealFS prefix); no editable field; form shows read-only derived value |
 | 3 TAINT setter | EXISTS | `cave::set_taint(cave_id: u16, bits: u32)` at line 794; spec name `taint::stamp` is wrong |
 | 4 Cave rename | DEFER TO WAVE 4+ | No rename API; NAME is read-only in Configure form |
 | 5 `cave::list` | EXISTS | Line 2034 `pub fn list<F: FnMut(&Cave)>(mut callback: F)`; call on every frame |

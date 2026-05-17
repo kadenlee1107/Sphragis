@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace `src/ui/apps/editor.rs` with a Wave-4-register single-buffer text editor that opens files from FILES, edits them in place, and saves back to BatFS. Bundle a tiny commit deleting the orphaned `src/ui/truetype.rs` (zero call sites since the no-browser pivot).
+**Goal:** Replace `src/ui/apps/editor.rs` with a Wave-4-register single-buffer text editor that opens files from FILES, edits them in place, and saves back to SealFS. Bundle a tiny commit deleting the orphaned `src/ui/truetype.rs` (zero call sites since the no-browser pivot).
 
 **Architecture:** One file does the work — `src/ui/apps/editor.rs` carries the buffer + cursor + paint + input handlers + cross-app handoff state. Custom 3-row layout (status strip, gutter+text, action strip) composed from existing Wave-3/4 widgets (`paint_state_dot`, `paint_action_strip`, `ConfirmModal`). Cross-app handoff via a `pub static`-backed `set_pending_file` / `take_pending_file` pair that FILES writes and EDITOR consumes on first paint. App switching reuses the existing `wm::iter + wm::focus + wm::open` pattern from `src/ui/desktop.rs:323`.
 
@@ -42,8 +42,8 @@ grep -nE 'pub fn (open|focus|iter|focused)' src/ui/wm.rs | head -6
 # 2. AppId enum variants
 grep -nE 'AppId::(Files|Editor)' src/ui/apps_registry.rs | head -3
 
-# 3. BatFS overwrite pattern
-grep -nE 'pub fn ns_(create|delete|read|list|stats)' src/fs/batfs.rs | head -6
+# 3. SealFS overwrite pattern
+grep -nE 'pub fn ns_(create|delete|read|list|stats)' src/fs/sealfs.rs | head -6
 
 # 4. Keyboard scancodes for arrows / Enter / Backspace / Tab / Esc
 grep -nE 'KEY_ARROW|0x08|0x09|0x0D|0x1B' src/drivers/virtio/keyboard.rs | head -8
@@ -55,7 +55,7 @@ grep -rnE 'truetype' src/ tests/ 2>&1 | grep -v -E '(comment|//|//)'
 Expected resolutions:
 - `wm::open(AppId, Option<&str>) -> Option<WindowId>`, `wm::focus(WindowId)`, `wm::iter()`, `wm::focused() -> Option<WindowId>` all exist.
 - `AppId::Files` and `AppId::Editor` exist in `src/ui/apps_registry.rs`.
-- `batfs::ns_create(&str, &[u8]) -> Result<(), &'static str>`, `batfs::ns_delete(&str) -> Result<(), &'static str>`, `batfs::ns_read(&str, &mut [u8]) -> Result<usize, &'static str>` all exist (Wave 4 confirmed).
+- `sealfs::ns_create(&str, &[u8]) -> Result<(), &'static str>`, `sealfs::ns_delete(&str) -> Result<(), &'static str>`, `sealfs::ns_read(&str, &mut [u8]) -> Result<usize, &'static str>` all exist (Wave 4 confirmed).
 - Backspace=`0x08`, Tab=`0x09`, Enter=`0x0D`, Esc=`0x1B`, Arrows=`0x90`–`0x93`, Shift+Arrows=`0x94`–`0x97`. **PgUp/PgDn/Home/End do NOT exist as constants** — Wave-5 EDITOR scrolls via arrow keys; spec's PgUp/PgDn mention is dropped here.
 - `src/ui/truetype.rs` has zero non-comment references outside the file itself and the `pub mod truetype;` declaration in `src/ui/mod.rs`. Deleting both is safe.
 
@@ -99,7 +99,7 @@ use crate::ui::widgets::{
     paint_confirm_modal, confirm_modal_key, ConfirmModal, ModalAction,
 };
 use crate::ui::wm::{self, WindowRect};
-use crate::fs::batfs;
+use crate::fs::sealfs;
 use crate::drivers::virtio::keyboard::{
     KEY_ARROW_UP, KEY_ARROW_DOWN, KEY_ARROW_LEFT, KEY_ARROW_RIGHT,
     KEY_SHIFT_ARROW_UP, KEY_SHIFT_ARROW_DOWN,
@@ -187,7 +187,7 @@ pub fn paint(body: WindowRect) {
     if let Some(n) = take_pending_file() {
         let bytes = unsafe { &*core::ptr::addr_of!(PENDING_FILE) };
         let name = unsafe { core::str::from_utf8_unchecked(&bytes[..n]) };
-        load_from_batfs(name);
+        load_from_sealfs(name);
     }
 
     crate::ui::gpu::fill_rect(body.x, body.y, body.w, body.h, p::BG);
@@ -215,7 +215,7 @@ pub fn paint(body: WindowRect) {
             paint_confirm_modal(&ConfirmModal {
                 title: "Discard unsaved changes and revert?",
                 body_lines: &[
-                    "  reload from BatFS",
+                    "  reload from SealFS",
                     "  discard the current buffer",
                 ],
                 commit_key: 'R',
@@ -416,7 +416,7 @@ fn handle_key_editing(c: u8) -> AppEvent {
             AppEvent::Repaint
         }
         0x0D => { newline(); AppEvent::Repaint }
-        b's' | b'S' if has_file && dirty() => { save_to_batfs(); AppEvent::Repaint }
+        b's' | b'S' if has_file && dirty() => { save_to_sealfs(); AppEvent::Repaint }
         b'r' | b'R' if has_file && dirty() => {
             unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::ConfirmRevert; }
             AppEvent::Repaint
@@ -435,7 +435,7 @@ fn handle_key_modal_revert(c: u8) -> AppEvent {
         ModalAction::Commit => {
             let name = current_file_name_owned();
             if let Some(n) = name.as_ref() {
-                load_from_batfs(n.as_str());
+                load_from_sealfs(n.as_str());
             }
             unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Editing; }
             AppEvent::Repaint
@@ -647,9 +647,9 @@ fn newline() {
     set_dirty();
 }
 
-// ── BatFS I/O ────────────────────────────────────────────────────
+// ── SealFS I/O ────────────────────────────────────────────────────
 
-fn load_from_batfs(name: &str) {
+fn load_from_sealfs(name: &str) {
     // Reset state.
     unsafe {
         *core::ptr::addr_of_mut!(BUFFER) = Buffer::empty();
@@ -673,7 +673,7 @@ fn load_from_batfs(name: &str) {
     }
     // Read into a temp staging buffer, then split on \n into lines.
     let mut staging = [0u8; MAX_LINES * MAX_LINE_LEN];
-    let bytes_read = match batfs::ns_read(name, &mut staging) {
+    let bytes_read = match sealfs::ns_read(name, &mut staging) {
         Ok(n) => n,
         Err(e) => {
             store_load_err(e.as_bytes());
@@ -721,7 +721,7 @@ fn parse_into_lines(bytes: &[u8]) {
     unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TRUNCATED), truncated); }
 }
 
-fn save_to_batfs() {
+fn save_to_sealfs() {
     let name_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) };
     if name_len == 0 { return; }
     let name_bytes = unsafe { &(*core::ptr::addr_of!(FILE_NAME))[..name_len] };
@@ -745,8 +745,8 @@ fn save_to_batfs() {
     }
 
     // Overwrite via delete + create (matches shell.rs's `write` command).
-    let _ = batfs::ns_delete(name);
-    match batfs::ns_create(name, &tmp[..n]) {
+    let _ = sealfs::ns_delete(name);
+    match sealfs::ns_create(name, &tmp[..n]) {
         Ok(()) => {
             unsafe {
                 core::ptr::write_volatile(core::ptr::addr_of_mut!(DIRTY), false);
@@ -845,8 +845,8 @@ Replaces the 826-line legacy cyberpunk editor. New shape:
   extension sniffing.
 * Cross-app handoff via pub fn set_pending_file(name) — FILES calls
   this then switches the active app to EDITOR; EDITOR consumes the
-  hint on first paint and loads via batfs::ns_read.
-* Save via batfs::ns_delete + batfs::ns_create (matches the existing
+  hint on first paint and loads via sealfs::ns_read.
+* Save via sealfs::ns_delete + sealfs::ns_create (matches the existing
   shell.rs `write` overwrite pattern).
 * Revert + Esc-with-dirty both protected by ConfirmModal.
 * Files > 1024 lines paint a "truncated to 1024 lines" banner so
@@ -872,14 +872,14 @@ Append this function to `src/ui/apps/filemanager.rs` just before the `// ── 
 
 ```rust
 fn open_selected_in_editor() -> AppEvent {
-    let (count, _) = batfs::ns_stats();
+    let (count, _) = sealfs::ns_stats();
     if count == 0 { return AppEvent::Consumed; }
 
     let mut name_buf = [0u8; NAME_MAX];
     let mut name_len = 0;
     let sel = selected_file();
     let mut row_index: usize = 0;
-    batfs::ns_list(|n, _, _| {
+    sealfs::ns_list(|n, _, _| {
         if row_index == sel {
             let l = n.len().min(NAME_MAX);
             name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -961,7 +961,7 @@ button) calls editor::set_pending_file(name) and switches the active
 app to EDITOR via the existing wm::iter/focus/open pattern.
 
 EDITOR consumes the hint on its next paint and loads the file via
-batfs::ns_read. Esc-back-to-FILES (handled in EDITOR) returns focus
+sealfs::ns_read. Esc-back-to-FILES (handled in EDITOR) returns focus
 with the prior selection preserved.
 
 Co-Authored-By: claude-flow <ruv@ruv.net>
@@ -1062,7 +1062,7 @@ Press `6` to open EDITOR (no file loaded yet). Confirm:
 
 - [ ] **Step 3: Verify FILES → EDITOR open flow.**
 
-Press `2` to open FILES. Use J/K to move selection to an existing file (need at least one file in BatFS first — if there's no file, press Ctrl+D to close FILES, press `5` for SHELL, type `write notes.txt "## Test\nhello world\n// a comment line\n"`, then `2` to reopen FILES).
+Press `2` to open FILES. Use J/K to move selection to an existing file (need at least one file in SealFS first — if there's no file, press Ctrl+D to close FILES, press `5` for SHELL, type `write notes.txt "## Test\nhello world\n// a comment line\n"`, then `2` to reopen FILES).
 
 Press Enter on the selected file. Confirm:
 - EDITOR window comes to focus (or opens if it wasn't open yet).
@@ -1097,7 +1097,7 @@ Reopen the file. Confirm the edits persisted (the file's content reflects what y
 
 Open the file again. Type a few chars (dirty). Press R. Confirm:
 - ConfirmModal appears with "Discard unsaved changes and revert?".
-- Press R again to commit. Buffer reloads from BatFS; dirty marker clears; cursor at L 1 C 1.
+- Press R again to commit. Buffer reloads from SealFS; dirty marker clears; cursor at L 1 C 1.
 
 Press R again without dirty changes. Confirm nothing happens (the action is FAINT-gated).
 
@@ -1154,7 +1154,7 @@ Same as Waves 1/2/3/4. Recommended choice: "Merge back to main locally" — full
 | §Scope — In: scrolling viewport | Task 1 (`scroll_viewport_to_cursor` + paint's viewport check) |
 | §Scope — In: comment-line tokenization | Task 1 (`is_comment_line`) |
 | §Scope — In: open flow via FILES Enter / [E] | Task 2 (`open_selected_in_editor` + key arms) |
-| §Scope — In: save flow | Task 1 (`save_to_batfs`) |
+| §Scope — In: save flow | Task 1 (`save_to_sealfs`) |
 | §Scope — In: revert flow + ConfirmModal | Task 1 (`AppMode::ConfirmRevert` + `handle_key_modal_revert`) |
 | §Scope — In: Esc with dirty prompt | Task 1 (`AppMode::ConfirmDiscard` + `handle_key_modal_discard`) |
 | §Scope — In: empty state | Task 1 (paint_status_strip "No file open" branch) |

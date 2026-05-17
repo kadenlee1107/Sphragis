@@ -65,7 +65,7 @@ Sphragis side:
 - New shell command `audit-flush-binary` writes `/audit.bin` per the
   `SPHRAGIS_AUDIT_BINARY_V1` format below.
 - `src/security/audit.rs` exports `BINARY_MAGIC`, `BINARY_HEADER_LEN`,
-  `serialize_binary(buf) -> bytes_written`, `flush_to_batfs_binary()`.
+  `serialize_binary(buf) -> bytes_written`, `flush_to_sealfs_binary()`.
 
 Verifier side (this tool):
 - `--binary` flag toggles binary-format parsing.

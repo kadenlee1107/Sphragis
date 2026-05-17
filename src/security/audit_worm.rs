@@ -1,7 +1,7 @@
-//! WORM (Write-Once-Read-Many) audit segment export to BatFS.
+//! WORM (Write-Once-Read-Many) audit segment export to SealFS.
 //!
 //! Per `DESIGN_AUDIT_WORM.md` (SP-AUD-002). Closes audit finding
-//! FS-H7. Sealed segments are persisted to BatFS as
+//! FS-H7. Sealed segments are persisted to SealFS as
 //! `audit/worm/segment-NNNNNNNNNN.bin` and an operator anchor lives
 //! at `audit/worm/LATEST_SEAL.bin`. Each sealed segment carries an
 //! HMAC-SHA-384 trailer chained to the previous segment's head hash;
@@ -9,10 +9,10 @@
 //! walks segments forward and detects truncation, modification, and
 //! missing-segment attacks.
 //!
-//! Substrate-honesty note: BatFS today exposes only `create()` /
+//! Substrate-honesty note: SealFS today exposes only `create()` /
 //! `read()` semantics (no append, no fsync). The WORM property here
 //! is "once sealed, a segment is never overwritten by the kernel".
-//! An attacker who can write BatFS can still corrupt sealed files,
+//! An attacker who can write SealFS can still corrupt sealed files,
 //! but cannot forge new valid chain links without the kernel-only
 //! `AUDIT_HMAC_KEY`. The off-platform anchor (operator copies
 //! `LATEST_SEAL.bin` periodically) closes the rewind/truncation
@@ -58,8 +58,8 @@ fn init_segment_header(seq: u64) {
 }
 
 /// Append a single audit entry to the current WORM segment. If the
-/// segment is full, it's sealed (flushed to BatFS) and a new one
-/// started. Failure modes: BatFS write errors during auto-seal
+/// segment is full, it's sealed (flushed to SealFS) and a new one
+/// started. Failure modes: SealFS write errors during auto-seal
 /// propagate as `Err`. Caller (audit::record) ignores errors today —
 /// the in-RAM ring + chain remain the source of truth for live audit.
 pub fn worm_append(entry: &Entry) -> Result<(), &'static str> {
@@ -83,7 +83,7 @@ pub fn worm_append(entry: &Entry) -> Result<(), &'static str> {
 }
 
 /// Seal the current segment: compute HMAC-SHA-384 over (seq ||
-/// prev_head_hash || records), write trailer, flush to BatFS at
+/// prev_head_hash || records), write trailer, flush to SealFS at
 /// `audit/worm/segment-NNNNNNNNNN.bin`. Rotates to seq+1 with a
 /// fresh header. Silent no-op if the current segment has no records
 /// (avoids creating empty sealed files at boot).
@@ -117,15 +117,15 @@ pub fn worm_seal_current() -> Result<(), &'static str> {
     let n = format_segment_name(&mut name, seq);
     let nm = core::str::from_utf8(&name[..n]).map_err(|_| "worm: name utf8")?;
     let payload = unsafe { &SEGMENT_BUF[..total] };
-    crate::fs::batfs::create(nm, payload).map_err(|_| "worm: batfs create segment failed")?;
+    crate::fs::sealfs::create(nm, payload).map_err(|_| "worm: sealfs create segment failed")?;
 
     let mut latest = [0u8; HEADER_LEN + CHAIN_HASH_LEN + 8];
     latest[..24].copy_from_slice(LATEST_MAGIC);
     latest[24..32].copy_from_slice(&seq.to_be_bytes());
     latest[32..32 + CHAIN_HASH_LEN].copy_from_slice(&head_hash);
     latest[32 + CHAIN_HASH_LEN..32 + CHAIN_HASH_LEN + 8].copy_from_slice(&prev_first8);
-    crate::fs::batfs::create("audit/worm/LATEST_SEAL.bin", &latest)
-        .map_err(|_| "worm: batfs create LATEST_SEAL failed")?;
+    crate::fs::sealfs::create("audit/worm/LATEST_SEAL.bin", &latest)
+        .map_err(|_| "worm: sealfs create LATEST_SEAL failed")?;
 
     unsafe { PREV_HEAD_HASH = head_hash; }
     init_segment_header(seq + 1);

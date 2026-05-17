@@ -112,7 +112,7 @@ Non-approved surfaces (rejected by `policy::ensure_permitted` under gov-strict):
 | `crypto::sig::*` (Ed25519) | Pre-PQ signing; non-approved in gov-strict |
 | `crypto::blake2s::*`, `crypto::blake3::*` | Outside FIPS-approved hash set |
 
-These remain compilable for the community build so existing TLS / WireGuard / BatFS code keeps working when the gov-strict flag is off. SP-B1.6.1 follow-up sweeps every call site to route through `policy::ensure_permitted`.
+These remain compilable for the community build so existing TLS / WireGuard / SealFS code keeps working when the gov-strict flag is off. SP-B1.6.1 follow-up sweeps every call site to route through `policy::ensure_permitted`.
 
 ---
 
@@ -195,7 +195,7 @@ Sphragis mitigates the following non-invasive attack classes:
 | CSP | Generation | Storage | Zeroization |
 |---|---|---|---|
 | Audit-chain HMAC key | RNDR seed at boot (`security::audit_chain::init_audit_key`) | Kernel-private static memory | `panic_wipe` → volatile zero + POISON flag |
-| BatFS master key | Argon2id over operator passphrase | RAM only (never persisted unencrypted); wrapped under user passphrase + per-cave label | Zeroized on cave teardown + on unmount |
+| SealFS master key | Argon2id over operator passphrase | RAM only (never persisted unencrypted); wrapped under user passphrase + per-cave label | Zeroized on cave teardown + on unmount |
 | Per-cave file keys | HKDF-SHA-384 derived from master key + per-file nonce | RAM only | Zeroized on cave teardown |
 | ML-KEM-1024 decapsulation keys | `Kem1024Key::generate` via RNG | Cave-private heap; explicit `Drop` zeroize | `Drop` impl |
 | ML-DSA-87 signing keys | `Dsa87Key::generate` via RNG | Cave-private heap | `Drop` impl |

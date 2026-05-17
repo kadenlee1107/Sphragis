@@ -8,7 +8,7 @@ runs `mls-selftest` at the shell, and asserts:
   - `cave::can_flow` returns the right verdict for all four
     Bell-LaPadula reference combinations (low→read→high DENY,
     high→read→low ALLOW, low→write→high ALLOW, high→write→low DENY).
-  - End-to-end through BatFS: sys-wg labeled Secret creates a file
+  - End-to-end through SealFS: sys-wg labeled Secret creates a file
     (stamped S); kernel-ns labeled U tries to read it via its OWN
     namespace mapping → fails with `mls: no read-up`. Same cave
     after elevation succeeds, demonstrating the label is what
@@ -62,7 +62,7 @@ def main() -> int:
 
         c.sendline("mls-selftest")
         idx = c.expect([
-            rb"\xe2\x9c\x93 MLS lattice \+ BatFS file-label no-read-up enforcement verified",
+            rb"\xe2\x9c\x93 MLS lattice \+ SealFS file-label no-read-up enforcement verified",
             rb"\xe2\x9c\x97 FAIL: \S+",
         ], timeout=30)
         if idx == 1:
@@ -75,7 +75,7 @@ def main() -> int:
             return 1
 
         c.expect(rb"sphragis > ", timeout=10)
-        print("[mls] PASS — Bell-LaPadula lattice + BatFS no-read-up verified")
+        print("[mls] PASS — Bell-LaPadula lattice + SealFS no-read-up verified")
         print(f"[mls] log: {LOG}")
         return 0
 

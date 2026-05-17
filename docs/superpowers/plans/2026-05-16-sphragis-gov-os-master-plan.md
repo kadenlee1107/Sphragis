@@ -236,7 +236,7 @@ Goto Track B/C/D/E in parallel; Track G (procurement) ramps now that entity exis
 **Tasks:**
 - **C1.1** — Design `attest` module: `pub fn quote(nonce: &[u8], claims: &Claims) -> Quote`. Quote contains: kernel measurement, cave identity, claims, nonce, signature. Document in `DESIGN_ATTESTATION.md`.
 - **C1.2** — Implement kernel-measurement: hash the loaded kernel image (text + rodata) + cargo metadata at boot. Store in a kernel-private attestation TCB key region.
-- **C1.3** — Define `CaveIdentity` type: name + public-key + measurement (hash of the cave's loaded code + config). Persisted in BatFS, sealed under the kernel attestation key.
+- **C1.3** — Define `CaveIdentity` type: name + public-key + measurement (hash of the cave's loaded code + config). Persisted in SealFS, sealed under the kernel attestation key.
 - **C1.4** — Implement attestation-key chain on M4: SEP-rooted. Boot Monitor → sepOS → m1n1 (measurement consumed) → Sphragis kernel measurement. Sphragis derives a kernel-attestation-key sealed to the boot measurement.
 - **C1.5** — Caliptra integration design (for x86_64 future): API surface for Caliptra-rooted measurement consumption. Implementation deferred to E1 (x86_64 port).
 - **C1.6** — Implement HSM-backed operator-CA pattern: PKCS#11 client in kernel (or via syscall surface) that talks to an external HSM. Operator-CA cert pre-installed; kernel attests against it. Operator-CA private key NEVER in Sphragis.
@@ -285,7 +285,7 @@ Goto Track B/C/D/E in parallel; Track G (procurement) ramps now that entity exis
 **Tasks:**
 - **C4.1** — Upgrade audit-chain HMAC from SHA-256 to SHA-384 (CNSA 2.0 alignment). Migration path: dual-chain during a transition window, then SHA-256 retired.
 - **C4.2** — Add missing audit categories per NIAP `FAU_GEN.1`: Authentication, PrivilegeEscalation, KernelModuleLoad, UpdateApply, FileAccessConfig.
-- **C4.3** — Implement WORM export: audit-ring writes a sealed (HMAC + LMS-signed) append-only file to a dedicated BatFS volume. Closes audit FS-H7.
+- **C4.3** — Implement WORM export: audit-ring writes a sealed (HMAC + LMS-signed) append-only file to a dedicated SealFS volume. Closes audit FS-H7.
 - **C4.4** — Implement offline verifier tool: given the audit volume + the seal-key cert chain, verify continuity of the hash chain + all per-entry HMACs. Ships in `sphragis-tools/audit-verifier/`.
 - **C4.5** — Cave-scoped audit reads: a cave reading the audit ring sees only its own entries unless it holds `audit:read-all` capability.
 - **C4.6** — Update audit-related QMP self-tests.
@@ -344,7 +344,7 @@ Goto Track B/C/D/E in parallel; Track G (procurement) ramps now that entity exis
 **Tasks:**
 - **D2.1** — Design installer flow: language → hardware probe → operator-CA selection or generate → unlock-passphrase setup → initial cave creation → first-boot tutorial.
 - **D2.2** — Build UEFI-bootable ISO for x86_64 (depends on E1) — placeholder during E1 development.
-- **D2.3** — Build M4-bootable package (m1n1 chainload installer + initial BatFS image). Ships as a `.dmg` for macOS install-helper, plus raw img for advanced users.
+- **D2.3** — Build M4-bootable package (m1n1 chainload installer + initial SealFS image). Ships as a `.dmg` for macOS install-helper, plus raw img for advanced users.
 - **D2.4** — Implement first-boot wizard inside Sphragis: runs once, then is removed from the boot sequence.
 - **D2.5** — Document installation procedure (`docs/INSTALLATION.md`).
 
@@ -568,7 +568,7 @@ Goto Track B/C/D/E in parallel; Track G (procurement) ramps now that entity exis
 **Requirements closed:** CRT-009
 
 **Tasks:**
-- Identify the most-relevant CSfC capability package: likely **Mobile Access** or **Data-at-Rest**. Sphragis-gov's per-cave isolation + BatFS encryption is a natural fit.
+- Identify the most-relevant CSfC capability package: likely **Mobile Access** or **Data-at-Rest**. Sphragis-gov's per-cave isolation + SealFS encryption is a natural fit.
 - Engage with NSA CSfC program office. Submit Sphragis (gov build) for component listing review.
 - Iterate on technical questions; provide attestation evidence + audit-chain evidence + threat model + ST.
 

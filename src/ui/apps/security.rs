@@ -65,7 +65,7 @@ pub fn paint(body: WindowRect) {
             title: "Wipe entire system?",
             body_lines: &[
                 "  zero all cave keys",
-                "  wipe BatFS",
+                "  wipe SealFS",
                 "  zero the audit ring",
                 "  clear MLS labels + taint records",
                 "  halt the kernel",

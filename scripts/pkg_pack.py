@@ -2,7 +2,7 @@
 """Sphragis package builder.
 
 Produces signed BPKG bundles that the on-device `pkg install` command
-verifies and unpacks into BatFS. Signed with the release-engineer
+verifies and unpacks into SealFS. Signed with the release-engineer
 Ed25519 key in ./release.key (same key used by release-verify).
 
 BPKG v1 binary layout (little-endian, no padding):
@@ -23,7 +23,7 @@ BPKG v1 binary layout (little-endian, no padding):
     [tail-64..tail]  Ed25519 signature over all preceding bytes
 
 Total bundle size capped at 1 MiB so the on-device verifier (which
-buffers the whole thing in stack-sized BatFS slack) can handle it.
+buffers the whole thing in stack-sized SealFS slack) can handle it.
 
 Usage:
     python3 scripts/pkg_pack.py NAME VERSION FILE [FILE ...]
@@ -32,7 +32,7 @@ Usage:
 
 Each FILE on the command line becomes an entry; the on-device path
 is the basename. Multi-directory packaging is a follow-up — for now
-v1 only writes basenames into BatFS root (which is flat anyway).
+v1 only writes basenames into SealFS root (which is flat anyway).
 """
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ def main(argv: list[str]) -> int:
     print(f"      at build time. Make sure it matches.)")
     print()
     print(f"install on Sphragis:")
-    print(f"  1. transfer {out} into BatFS (write/cat/pkg-stage etc.)")
+    print(f"  1. transfer {out} into SealFS (write/cat/pkg-stage etc.)")
     print(f"  2. pkg install {out}")
     return 0
 

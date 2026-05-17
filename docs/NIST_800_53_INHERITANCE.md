@@ -46,7 +46,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### AC-4 — Information Flow Enforcement
 
 **Status:** PARTIAL.
-**Claim:** Bell-LaPadula sensitivity + Biba integrity labels enforced at file-system level (BatFS AAD-bound classification; tampering invalidates decryption). Per-cave taint bitmap propagates across reads/writes monotonically. CIPSO/CALIPSO IPv4/IPv6 packet labels (`src/net/cave_policy.rs`).
+**Claim:** Bell-LaPadula sensitivity + Biba integrity labels enforced at file-system level (SealFS AAD-bound classification; tampering invalidates decryption). Per-cave taint bitmap propagates across reads/writes monotonically. CIPSO/CALIPSO IPv4/IPv6 packet labels (`src/net/cave_policy.rs`).
 **Customer gap:** IPC-level information-flow labeling (pipe/shm) is documented in master plan §ISO-003 as a future SP. Customer documents the IPC use cases that need it.
 
 ### AC-6 — Least Privilege
@@ -122,7 +122,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### AC-19 — Access Control for Mobile Devices
 
 **Status:** PARTIAL.
-**Claim:** Sphragis runs on Apple M4 hardware (a mobile-class device). Lock screen + emergency wipe (`Ctrl+W`) + BatFS at-rest encryption + per-cave isolation give mobile-appropriate access control.
+**Claim:** Sphragis runs on Apple M4 hardware (a mobile-class device). Lock screen + emergency wipe (`Ctrl+W`) + SealFS at-rest encryption + per-cave isolation give mobile-appropriate access control.
 **Customer gap:** Customer documents their mobile-device-management policy (MDM is out-of-OS-scope; customer chooses MDM vendor).
 
 ### AC-20 — Use of External Information Systems
@@ -186,8 +186,8 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### AU-4 — Audit Log Storage Capacity
 
 **Status:** SATISFIED.
-**Claim:** Ring buffer RING_CAP = 1024 entries in-RAM. Flush-to-BatFS via `audit::flush_to_batfs` writes to `/audit.log` (256KB static buffer). EVICTED counter detects rollover; FIRST_OVERFLOW_WARNED emits a one-time UART warning when the ring rolls over.
-**Customer gap:** Customer configures the flush cadence (cron-style external trigger of `audit-flush` or on-cave-event flush_to_batfs calls).
+**Claim:** Ring buffer RING_CAP = 1024 entries in-RAM. Flush-to-SealFS via `audit::flush_to_sealfs` writes to `/audit.log` (256KB static buffer). EVICTED counter detects rollover; FIRST_OVERFLOW_WARNED emits a one-time UART warning when the ring rolls over.
+**Customer gap:** Customer configures the flush cadence (cron-style external trigger of `audit-flush` or on-cave-event flush_to_sealfs calls).
 
 ### AU-5 — Response to Audit Logging Failures
 
@@ -211,7 +211,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 
 **Status:** SATISFIED.
 **Claim:** Audit ring is kernel-mode only; not reachable from EL0 (per-cave ASIDs + page tables enforce). HMAC-SHA-256 chain detects tampering. Tampering tools (e.g., `tamper_test_flip_msg_byte`) are `#[allow(dead_code)]` test-only.
-**Customer gap:** Customer chains the audit-export (BatFS audit.log) to their own integrity controls; SP-AUD-002 WORM export adds external-anchor support.
+**Customer gap:** Customer chains the audit-export (SealFS audit.log) to their own integrity controls; SP-AUD-002 WORM export adds external-anchor support.
 
 ### AU-10 — Non-repudiation
 
@@ -222,7 +222,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### AU-11 — Audit Record Retention
 
 **Status:** PARTIAL.
-**Claim:** Audit.log flushed to BatFS persists across boots; restore_from_persisted re-populates on next boot.
+**Claim:** Audit.log flushed to SealFS persists across boots; restore_from_persisted re-populates on next boot.
 **Customer gap:** Long-term retention requires off-platform archiving — customer pipes audit.log to their SIEM / long-term storage per their retention policy. SP-AUD-002 WORM export adds external-anchor support.
 
 ### AU-12 — Audit Record Generation
@@ -251,7 +251,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### AU-16 — Cross-Organizational Audit Sharing
 
 **Status:** CUSTOMER.
-**Claim:** Audit-flush exports to BatFS in a documented format (per `tools/audit-verifier/audit_verifier.py`); customer pipes to their SIEM for cross-organizational sharing.
+**Claim:** Audit-flush exports to SealFS in a documented format (per `tools/audit-verifier/audit_verifier.py`); customer pipes to their SIEM for cross-organizational sharing.
 **Customer gap:** Customer establishes sharing-protocol with peer organizations.
 
 ---
@@ -291,7 +291,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### CM-6 — Configuration Settings
 
 **Status:** PARTIAL.
-**Claim:** Build profile pinned by compile-time gov-strict feature flag (SP-B1.6 policy gate; const-eval enum allowlist); runtime config (cave policies, firewall rules) lives in BatFS-backed `/etc/sphragis/` with WORM audit trail on changes (SP-AUD-002). Reproducible build (SP-BLD-002 VERIFIED) lets the operator compare an installed kernel ELF against an expected SHA-256.
+**Claim:** Build profile pinned by compile-time gov-strict feature flag (SP-B1.6 policy gate; const-eval enum allowlist); runtime config (cave policies, firewall rules) lives in SealFS-backed `/etc/sphragis/` with WORM audit trail on changes (SP-AUD-002). Reproducible build (SP-BLD-002 VERIFIED) lets the operator compare an installed kernel ELF against an expected SHA-256.
 **Customer gap:** Customer documents which build profile + cave-policy set is approved for their deployment; runs SHA-256 verification at install time.
 
 ### CM-7 — Least Functionality
@@ -327,7 +327,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### CM-12 — Information Location
 
 **Status:** PARTIAL.
-**Claim:** BatFS provides per-cave encrypted storage with documented mount points; cross-cave reads require explicit capability grants (capability-system enforced). Audit ring records every file open/close with cave-attribution.
+**Claim:** SealFS provides per-cave encrypted storage with documented mount points; cross-cave reads require explicit capability grants (capability-system enforced). Audit ring records every file open/close with cave-attribution.
 **Customer gap:** Customer maintains the data-location inventory of which caves hold which categories of customer data.
 
 ### CM-13 — Data Action Mapping
@@ -461,7 +461,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### SC-28 — Protection of Information at Rest
 
 **Status:** SATISFIED.
-**Claim:** BatFS at-rest AES-256-GCM-SIV (audit-week-8 elite-tier closure). Per-cave + per-file keys. AAD bound to security label.
+**Claim:** SealFS at-rest AES-256-GCM-SIV (audit-week-8 elite-tier closure). Per-cave + per-file keys. AAD bound to security label.
 **Customer gap:** Customer establishes per-cave passphrase strength + key-rotation cadence.
 
 ### SC-39 — Process Isolation
@@ -523,7 +523,7 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 ### MP-4 — Media Storage
 
 **Status:** SATISFIED.
-**Claim:** BatFS AES-256-GCM-SIV at-rest encryption. Argon2id-protected master key derivation.
+**Claim:** SealFS AES-256-GCM-SIV at-rest encryption. Argon2id-protected master key derivation.
 **Customer gap:** Customer establishes media-handling procedures for physical-loss scenarios.
 
 ### MP-7 — Media Use

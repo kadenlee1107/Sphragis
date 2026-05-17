@@ -129,7 +129,7 @@ Real, working, in tree as of `feat/wireguard-phase1` merge:
 | Primitive | Where | Used for |
 |------|------|------|
 | Cave capability set | `src/caves/cave.rs` | Per-cave access control on net, fs, mem, etc. |
-| Cave fs_key per cave | `src/caves/cave.rs:fs_key` | BatFS files encrypted per-cave, leaked filenames don't decrypt across caves |
+| Cave fs_key per cave | `src/caves/cave.rs:fs_key` | SealFS files encrypted per-cave, leaked filenames don't decrypt across caves |
 | Cave page-table slot (`cave_l1_phys`, `cave_l1_slot`) | `src/caves/cave.rs` + `src/caves/linux/mmu.rs` | Per-cave L1 (TTBR0_EL1) prepared at first `cave::enter`. **TLB invalidate + TTBR swap already implemented** in `mmu::switch_to_cave`. |
 | Authenticated IPC | `src/caves/ipc_session.rs` | Ed25519 identity + X25519 ephemeral + signed offer + derived ChaCha20-Poly1305 session key. `ipc-selftest` passes. |
 | Cave-policy (egress firewall per cave) | `src/net/cave_policy.rs` | Per-cave outbound rate limits, allow-lists, SNI matching. |

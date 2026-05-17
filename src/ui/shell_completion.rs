@@ -32,7 +32,7 @@ pub static COMMAND_NAMES: &[&str] = &[
     "caves-fw-allow",
     "caves-fw-deny",
     "caves-fw-list",
-    "batfs-quota-selftest",
+    "sealfs-quota-selftest",
     "blk-selftest",
     "blk-status",
     "block-on-selftest",
@@ -309,7 +309,7 @@ pub fn complete_command(prefix: &str) -> Completion {
 
 /// Per-name buffer width for the argument-candidate list. Sized for
 /// the longest realistic argument:
-/// - batfs filenames cap at `batfs::FILE_NAME_LEN` = 64 bytes
+/// - sealfs filenames cap at `sealfs::FILE_NAME_LEN` = 64 bytes
 /// - cave names cap at 32 bytes by `caves::cave::MAX_NAME_LEN`
 const MAX_ARG_NAME: usize = 64;
 
@@ -317,7 +317,7 @@ const MAX_ARG_NAME: usize = 64;
 /// which enumerator the shell should pull candidates from.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ArgKind {
-    /// Command takes a file name from BatFS as its next argument.
+    /// Command takes a file name from SealFS as its next argument.
     File,
     /// Command takes a cave name (registered via `cave_policy`) as
     /// its next argument.
@@ -346,7 +346,7 @@ const SUB_PKG: &[&str] = &["install", "list", "remove", "stage"];
 /// `comms <connect|send|identify|pin|my-id>`
 const SUB_COMMS: &[&str] = &["connect", "identify", "my-id", "pin", "send"];
 
-/// `mount-ns <ls|write|read|rm>` (cave-scoped BatFS view).
+/// `mount-ns <ls|write|read|rm>` (cave-scoped SealFS view).
 const SUB_MOUNT_NS: &[&str] = &["ls", "read", "rm", "write"];
 
 /// `clip <set|yank-back|push|pull|clear|show>`
@@ -434,7 +434,7 @@ pub fn arg_kind_for_parts(parts: &[&str], arg_index: usize) -> ArgKind {
 
         // ── Multi-arg dispatch: (cmd, subcommand) -> next arg's kind ──
         // `pkg install <bundle.bpkg>` and `pkg remove <bundle>` —
-        // both are BatFS files. `pkg stage <name> <ip:port>` is a
+        // both are SealFS files. `pkg stage <name> <ip:port>` is a
         // fresh filename, no completion. `pkg list` takes nothing.
         ("pkg", "install"|"remove", 1) => ArgKind::File,
 
@@ -452,7 +452,7 @@ pub fn arg_kind_for_parts(parts: &[&str], arg_index: usize) -> ArgKind {
             |"docker-destroy"|"docker-run"|"docker-ping", 1) => ArgKind::Cave,
 
         // `hash <algo> <file>` — algo is arg 0 (Literal above);
-        // arg 1 is the file in BatFS.
+        // arg 1 is the file in SealFS.
         ("hash", _, 1) => ArgKind::File,
 
         _ => ArgKind::None,
@@ -535,7 +535,7 @@ pub fn complete_argument(kind: ArgKind, current: &str) -> ArgCompletion {
             // gap-audit 032: tab completion scopes to the active
             // cave's mount namespace — completing `cat <TAB>` from
             // inside a cave only suggests that cave's files.
-            crate::fs::batfs::ns_list(|name, _size, _enc| consider(name.as_bytes()));
+            crate::fs::sealfs::ns_list(|name, _size, _enc| consider(name.as_bytes()));
         }
         ArgKind::Cave => {
             crate::caves::cave::list(|cv| consider(cv.name_str().as_bytes()));

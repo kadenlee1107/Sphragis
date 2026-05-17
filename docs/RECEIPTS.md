@@ -27,8 +27,8 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
   - **Selftest:** `python3 scripts/qemu_cave_private_selftest.py` — proves that cave A cannot read or write memory mapped in cave B's TTBR0 window.
 - **Mount namespace per cave.** `feat/mount-ns-auto-apply` → `28875714`. [`src/caves/cave.rs::active_mount_prefix`](../src/caves/cave.rs).
   - **Selftest:** `python3 scripts/qemu_mount_ns_selftest.py` — proves that two caves can each create a file named "config" without colliding; cave A cannot list cave B's filenames.
-- **Memory quota per cave.** `feat/batfs-quota-enforcement` → `aab7630c`; expansion to ELF runner via `feat/quota-cave-private-elf` → `28b53783`.
-  - **Selftest:** `python3 scripts/qemu_batfs_quota_selftest.py` — proves quota is charged on `ns_create`, released on `ns_delete`, and that a cave exceeding its quota fails the write before reaching the encryption stage.
+- **Memory quota per cave.** `feat/sealfs-quota-enforcement` → `aab7630c`; expansion to ELF runner via `feat/quota-cave-private-elf` → `28b53783`.
+  - **Selftest:** `python3 scripts/qemu_sealfs_quota_selftest.py` — proves quota is charged on `ns_create`, released on `ns_delete`, and that a cave exceeding its quota fails the write before reaching the encryption stage.
 - **IPC mailbox per cave (sys-wg).** Arc 3 slice 3 → `767306d0`. [`src/caves/sys_wg_ipc.rs`](../src/caves/sys_wg_ipc.rs).
   - **Selftest:** `python3 scripts/qemu_sys_wg_ipc_selftest.py`.
 
@@ -38,7 +38,7 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
 
 ### Bell-LaPadula sensitivity lattice
 - **Claim:** No read-up. A cave at sensitivity level `L_s` can read a file at level `L_o` only when `L_s ≥ L_o`.
-- **Commit:** `feat/mls-labels-batfs` → `43d298a4`. Labels stamped at `ns_create`, enforced at `ns_read`.
+- **Commit:** `feat/mls-labels-sealfs` → `43d298a4`. Labels stamped at `ns_create`, enforced at `ns_read`.
 - **Selftest:** `python3 scripts/qemu_mls_selftest.py` — proves no-read-up against the four-level lattice (Unclassified / Confidential / Secret / TopSecret).
 
 ### Biba integrity lattice (dual to BLP)
@@ -48,8 +48,8 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
 
 ### AEAD-bound MLS labels
 - **Claim:** A file's MLS labels are bound into the AEAD's AAD (`filename || sens || integ`). Any in-place tamper of the label invalidates decryption and the read fails closed.
-- **Commits:** `feat/mls-labels-aead-bound` → `ec497e0e` (BatFS files); `feat/mls-ipc-aead-bound` → `d747bb75` (IPC messages).
-- **Selftest:** `python3 scripts/qemu_mls_binding_selftest.py` (BatFS) + `python3 scripts/qemu_mls_ipc_binding_selftest.py` (IPC) — both prove a flipped label byte produces an AEAD verification failure rather than silent label confusion.
+- **Commits:** `feat/mls-labels-aead-bound` → `ec497e0e` (SealFS files); `feat/mls-ipc-aead-bound` → `d747bb75` (IPC messages).
+- **Selftest:** `python3 scripts/qemu_mls_binding_selftest.py` (SealFS) + `python3 scripts/qemu_mls_ipc_binding_selftest.py` (IPC) — both prove a flipped label byte produces an AEAD verification failure rather than silent label confusion.
 
 ### SELinux-style Type Enforcement (subjects + objects)
 - **Claim:** Per-(domain, type, op) DENY matrix on filesystem access; per-(from_cave, to_cave) allow-list on cave transitions.
@@ -57,7 +57,7 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
 - **Selftests:** `python3 scripts/qemu_te_selftest.py` (transitions) + `python3 scripts/qemu_te_obj_selftest.py` (object-type matrix).
 
 ### Exec-time domain auto-transition (`domain_auto_trans`)
-- **Claim:** A BatFS file can be tagged with a target cave id; running it via `exec-file` swaps the active cave to that target, gated by the existing TE allow-list. Matches SELinux execve semantics (lookup in caller namespace, transition before run).
+- **Claim:** A SealFS file can be tagged with a target cave id; running it via `exec-file` swaps the active cave to that target, gated by the existing TE allow-list. Matches SELinux execve semantics (lookup in caller namespace, transition before run).
 - **Commit:** `feat/exec-domain-trans` → `faaebc1b`.
 - **Selftest:** `python3 scripts/qemu_exec_trans_selftest.py` — proves (a) rule round-trip through lookup, (b) policy denies a non-admin transition without a rule and permits it after `add_transition_rule`, (c) admin caller successfully fires the transition.
 
@@ -81,7 +81,7 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
 - **Selftest:** `python3 scripts/qemu_audit_chain_selftest.py` — proves that flipping a single byte of any past audit entry is detected, with the correct mismatch index reported.
 
 ### Off-platform audit seal
-- **Claim:** The chain head + entry count can be serialized as a 40-byte seal, written to BatFS (and, in production, sealed off-platform via TPM / Apple SE / paper QR). On re-mount the verifier walks `start..seal.count` and either confirms `OK`, reports `Truncated{missing}`, or reports `Mismatch`.
+- **Claim:** The chain head + entry count can be serialized as a 40-byte seal, written to SealFS (and, in production, sealed off-platform via TPM / Apple SE / paper QR). On re-mount the verifier walks `start..seal.count` and either confirms `OK`, reports `Truncated{missing}`, or reports `Mismatch`.
 - **Commit:** `feat/audit-chain-seal` → `7e2f4507`.
 - **Selftest:** `python3 scripts/qemu_audit_seal_selftest.py` — proves the four-state verification outcome (`Ok`, `Truncated`, `Mismatch`, `SealAheadOfHead`).
 - **Disclosure note:** The specific `SealVerify` state machine is held as Tier 3 (see [`DISCLOSURE_POSTURE.md`](DISCLOSURE_POSTURE.md)). Code is verifiable; design is not described in prose here.

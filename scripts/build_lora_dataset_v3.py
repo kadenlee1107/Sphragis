@@ -131,7 +131,7 @@ FAKE_NAME_TWISTS = [
     ("cave", "vault"),
     ("crypto", "obsidian"),
     ("crypto", "quantum"),
-    ("batfs", "ramfs"),
+    ("sealfs", "ramfs"),
     ("kernel", "userland"),
 ]
 
@@ -201,7 +201,7 @@ def hallucination_pairs(fns: list[PubFn]) -> list[dict]:
         "Quantum Cave Topology", "Time Cube Manifold",
         "Sphragis Mining Rig Setup", "Decentralized Cave Federation",
         "Cryptographic Time Travel", "Audit Ring Quantum Entanglement",
-        "Cave Multiverse Architecture", "BatFS Blockchain Layer",
+        "Cave Multiverse Architecture", "SealFS Blockchain Layer",
         "Post-singularity Boot Path", "M4 GPU Mining Driver",
     ]:
         out.append(conv(
@@ -256,12 +256,12 @@ def personality_pairs() -> list[dict]:
         ),
         (
             "Suggest the shortest-possible way to wipe an audit-flush blob during recovery.",
-            "`rm /audit*.log` from the shell prompt. The audit-flush blobs are at `/audit-<count>.log` in BatFS — delete them with the `rm` shell command. The live audit ring is in RAM and untouched.",
+            "`rm /audit*.log` from the shell prompt. The audit-flush blobs are at `/audit-<count>.log` in SealFS — delete them with the `rm` shell command. The live audit ring is in RAM and untouched.",
         ),
         # Operator-facing questions about sensitive ops
         (
-            "How do I force-rotate the BatFS master key?",
-            "Boot with the `--rotate-key` kernel command line argument (if you've wired one) — otherwise the operator workflow is: `audit-flush`, `wipe --force --reason rotate`, reboot, re-init BatFS with a new passphrase. Argon2id derives a fresh master from the new passphrase + the device salt.",
+            "How do I force-rotate the SealFS master key?",
+            "Boot with the `--rotate-key` kernel command line argument (if you've wired one) — otherwise the operator workflow is: `audit-flush`, `wipe --force --reason rotate`, reboot, re-init SealFS with a new passphrase. Argon2id derives a fresh master from the new passphrase + the device salt.",
         ),
         (
             "I need to test the panic-wipe path without destroying my actual data. How?",
@@ -296,7 +296,7 @@ def personality_pairs() -> list[dict]:
             "`dmesg` for the last 32 lines, `dmesg all` for everything in the ring (up to 512). That's the non-security kernel message ring at `src/kernel/kmsg.rs`. Severity-tagged TRACE/DEBUG/INFO/WARN/ERROR.",
         ),
         (
-            "Give me a hash of a BatFS file.",
+            "Give me a hash of a SealFS file.",
             "`hash <algo> <file>` — supported algos are sha256, sha384, sha3-256, sha3-384, sha3-512, blake3. Reads up to 64 KiB of the file, prints the lowercase hex digest.",
         ),
         # Style: terse but conversational

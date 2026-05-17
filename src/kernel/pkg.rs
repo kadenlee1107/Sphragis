@@ -1,6 +1,6 @@
 //! Sphragis package manager.
 //!
-//! Gap-audit item 033. Installs signed BPKG bundles into BatFS,
+//! Gap-audit item 033. Installs signed BPKG bundles into SealFS,
 //! tracks what's installed, lets the operator remove packages.
 //!
 //! Trust model: every bundle is signed with the release-engineer
@@ -27,16 +27,16 @@
 //!               content       <size> bytes
 //!     [tail-64..tail]  Ed25519 signature over all preceding bytes
 //!
-//! Install state is persisted as a single BatFS file
+//! Install state is persisted as a single SealFS file
 //! `installed_packages` — newline-separated `<name>\t<version>\t<paths...>`
-//! tuples. Small enough to fit in one BatFS read.
+//! tuples. Small enough to fit in one SealFS read.
 //!
 //! Limitations of this first cut:
 //!   * No dependency resolution. Each package is independent.
 //!   * No update path (`pkg install foo` over an existing foo
 //!     refuses; remove first).
-//!   * All files install into BatFS root (single namespace). Paths
-//!     with directory separators would need BatFS hierarchy first.
+//!   * All files install into SealFS root (single namespace). Paths
+//!     with directory separators would need SealFS hierarchy first.
 
 #![allow(dead_code)]
 
@@ -45,7 +45,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::crypto::sig;
-use crate::fs::batfs;
+use crate::fs::sealfs;
 
 pub const MAGIC: &[u8] = b"BPKG";
 pub const FORMAT_VERSION: u8 = 1;
@@ -66,7 +66,7 @@ pub enum PkgError {
     Sha256Mismatch,
     AlreadyInstalled,
     NotInstalled,
-    BatFsError(&'static str),
+    SealFsError(&'static str),
 }
 
 impl PkgError {
@@ -82,7 +82,7 @@ impl PkgError {
             PkgError::Sha256Mismatch   => "per-file sha256 mismatch (tampered payload)",
             PkgError::AlreadyInstalled => "package already installed (remove first)",
             PkgError::NotInstalled     => "package not installed",
-            PkgError::BatFsError(e)    => e,
+            PkgError::SealFsError(e)    => e,
         }
     }
 }
@@ -193,7 +193,7 @@ pub fn parse_and_verify<'a>(
     Ok(PkgBundle { name, version: ver, files })
 }
 
-/// Install a parsed bundle. Writes every entry into BatFS root and
+/// Install a parsed bundle. Writes every entry into SealFS root and
 /// records the package in `installed_packages`. Refuses to overwrite
 /// an existing package — the operator must `pkg remove <name>` first.
 pub fn install(bundle: &PkgBundle) -> Result<(), PkgError> {
@@ -207,14 +207,14 @@ pub fn install(bundle: &PkgBundle) -> Result<(), PkgError> {
     // this catches the cross-package-conflict case.
     for f in &bundle.files {
         let mut probe = [0u8; 4];
-        if batfs::read(f.path, &mut probe).is_ok() {
-            return Err(PkgError::BatFsError("a target file already exists"));
+        if sealfs::read(f.path, &mut probe).is_ok() {
+            return Err(PkgError::SealFsError("a target file already exists"));
         }
     }
 
     // Write files.
     for f in &bundle.files {
-        batfs::create(f.path, f.content).map_err(PkgError::BatFsError)?;
+        sealfs::create(f.path, f.content).map_err(PkgError::SealFsError)?;
     }
 
     // Append to installed DB.
@@ -229,12 +229,12 @@ pub fn install(bundle: &PkgBundle) -> Result<(), PkgError> {
     }
     line.push('\n');
     db.push_str(&line);
-    write_db(&db).map_err(PkgError::BatFsError)?;
+    write_db(&db).map_err(PkgError::SealFsError)?;
     Ok(())
 }
 
 /// Iterate over installed packages with (name, version, paths-tsv).
-/// `paths-tsv` is tab-separated since BatFS file paths are
+/// `paths-tsv` is tab-separated since SealFS file paths are
 /// path-separator-free today (single namespace).
 pub fn for_each_installed<F: FnMut(&str, &str, &str)>(mut f: F) {
     let db = read_db();
@@ -278,7 +278,7 @@ pub fn remove(name: &str) -> Result<(), PkgError> {
                 if let Some(paths) = parts.next() {
                     for path in paths.split('\t') {
                         if !path.is_empty() {
-                            let _ = batfs::delete(path);
+                            let _ = sealfs::delete(path);
                         }
                     }
                 }
@@ -289,20 +289,20 @@ pub fn remove(name: &str) -> Result<(), PkgError> {
         new_db.push('\n');
     }
     if !found { return Err(PkgError::NotInstalled); }
-    write_db(&new_db).map_err(PkgError::BatFsError)?;
+    write_db(&new_db).map_err(PkgError::SealFsError)?;
     Ok(())
 }
 
 fn read_db() -> String {
     let mut buf = [0u8; 8192];
-    match batfs::read(INSTALLED_DB, &mut buf) {
+    match sealfs::read(INSTALLED_DB, &mut buf) {
         Ok(n) => String::from_utf8_lossy(&buf[..n]).into_owned(),
         Err(_) => String::new(),
     }
 }
 
 fn write_db(content: &str) -> Result<(), &'static str> {
-    // BatFS doesn't have "create or replace" — delete first if exists.
-    let _ = batfs::delete(INSTALLED_DB);
-    batfs::create(INSTALLED_DB, content.as_bytes())
+    // SealFS doesn't have "create or replace" — delete first if exists.
+    let _ = sealfs::delete(INSTALLED_DB);
+    sealfs::create(INSTALLED_DB, content.as_bytes())
 }

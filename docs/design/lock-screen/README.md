@@ -29,7 +29,7 @@ What we ship differs from the source in three ways, deliberately:
    design said "Argon2id · 64MB · t=3", "TPM SEALED",
    "AES-XTS-512", "SECURE BOOT OK" — none of which we have. The
    implementation uses our actual values: SHA-256 KDF (16 rounds),
-   BatFS MOUNTED, AES-256-CTR, M1N1 CHAINLOAD. When we land Argon2id
+   SealFS MOUNTED, AES-256-CTR, M1N1 CHAINLOAD. When we land Argon2id
    / TPM / etc. we'll re-tighten the labels.
 
 2. **8×16 bitmap font instead of JetBrains Mono.** `ui/truetype.rs`

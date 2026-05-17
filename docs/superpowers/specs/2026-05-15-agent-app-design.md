@@ -324,5 +324,5 @@ Pre-flight investigation (Task 0c) resolves:
 - Multi-line composer / paste / clipboard integration.
 - Per-token streaming animation polish (the UI repaints whole turns
   per paint cycle, which is sufficient at 60 fps).
-- Conversation export to BatFS (could route through FILES app later).
+- Conversation export to SealFS (could route through FILES app later).
 - Action strip (composer is the only affordance).

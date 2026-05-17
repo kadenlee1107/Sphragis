@@ -27,7 +27,7 @@ Ported to Rust as STUMP #129:
 - **`src/ui/apps/filemanager.rs`** — rewritten. Header strip
   ("ENCRYPTED VAULT . AES-256-CTR + SHA-256 integrity" + file
   count). Column header (STATUS / FILENAME / SIZE / CIPHER /
-  MERKLE OK). Real BatFS row iteration with [ENC]/[RAW] state
+  MERKLE OK). Real SealFS row iteration with [ENC]/[RAW] state
   badges, "f" prefix on names, KiB/MiB size formatting, cyan
   cipher label, green OK marker. Selection rendering: 1px
   cyan-dim inset border + 2px cyan underline at row bottom

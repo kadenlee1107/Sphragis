@@ -25,7 +25,7 @@ ALIGNMENT WITH DESIGN_CAVES.md
   [x] Destruction — on shutdown or explicit DESTROY, the container is
       `docker rm -f`'d. If the deadman hook is armed, loss of Sphragis
       heartbeat triggers DESTROY-ALL.
-  [ ] Phase-3: Filesystem encryption via BatFS-derived key (TODO)
+  [ ] Phase-3: Filesystem encryption via SealFS-derived key (TODO)
   [ ] Phase-4: Network traffic routed through Sphragis pipeline (TODO)
   [ ] Phase-5: Deadman/duress/panic heartbeat integration (TODO)
 

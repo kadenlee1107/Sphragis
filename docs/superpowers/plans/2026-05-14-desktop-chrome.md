@@ -42,7 +42,7 @@ This plan creates and modifies the following files. Each new module has one clea
 | `src/ui/apps_registry.rs` | **NEW** | Static `AppId` enum + `AppDescriptor` table. The "what apps exist" table. |
 | `src/ui/wm.rs` | **REPLACED** | Floating-window manager: `Window` struct, fixed-size store, focus, drag, resize, paint. |
 | `src/ui/topbar.rs` | **NEW** | Top status strip: paint, click handling, config sheet. |
-| `src/ui/topbar_config.rs` | **NEW** | Badge enable/order state, BatFS persistence. |
+| `src/ui/topbar_config.rs` | **NEW** | Badge enable/order state, SealFS persistence. |
 | `src/ui/launcher.rs` | **NEW** | 8-app launcher overlay: paint, click handling. |
 | `src/ui/desktop.rs` | **REPLACED** | State machine (LAUNCHER / ACTIVE / OVERLAY) + event loop. `run() -> LockReason`. |
 | `src/ui/mod.rs` | **MODIFY** | Register new modules. |
@@ -774,7 +774,7 @@ The 22-px top strip with brand wordmark, customizable badges, config trigger, an
 
 ```rust
 //! Top-bar badge config: which badges to show, in what order.
-//! Persists to /system/desktop/topbar.cfg in BatFS as a one-line
+//! Persists to /system/desktop/topbar.cfg in SealFS as a one-line
 //! ASCII letter sequence ("NDC" = NET, DEADMAN, CLOCK).
 
 #![allow(dead_code)]
@@ -870,12 +870,12 @@ fn save() {
     }
     buf[n] = b'\n';
     n += 1;
-    let _ = crate::fs::batfs::create(CONFIG_FILE, &buf[..n]);
+    let _ = crate::fs::sealfs::create(CONFIG_FILE, &buf[..n]);
 }
 
 pub fn load() {
     let mut buf = [0u8; MAX_BADGES + 1];
-    if let Ok(n) = crate::fs::batfs::read(CONFIG_FILE, &mut buf) {
+    if let Ok(n) = crate::fs::sealfs::read(CONFIG_FILE, &mut buf) {
         let mut new_badges: [Option<Badge>; MAX_BADGES] = [None; MAX_BADGES];
         let mut j = 0;
         for &c in &buf[..n] {
@@ -1060,7 +1060,7 @@ Expected: clean.
 ```bash
 git add src/ui/topbar.rs src/ui/topbar_config.rs src/ui/mod.rs src/net/ src/caves/ src/security/
 git commit -m "$(cat <<'EOF'
-topbar: 22-px status strip + customizable badges + BatFS persist
+topbar: 22-px status strip + customizable badges + SealFS persist
 
 * topbar.rs paints brand wordmark + badge list + '...' config
   trigger + '[L]' lock glyph. hit_test routes clicks to one of
@@ -1470,20 +1470,20 @@ Wrap boot_screen + desktop in a loop so the workspace persists across lock.
 - [ ] **Step 1: Find call sites.**
 
 ```bash
-grep -nE 'boot_screen::run|desktop::run|batfs::init|batfs::mount' /Users/kadenlee/Sphragis/src/main.rs
+grep -nE 'boot_screen::run|desktop::run|sealfs::init|sealfs::mount' /Users/kadenlee/Sphragis/src/main.rs
 ```
 
-Note every `boot_screen::run` and `desktop::run` line. Note the BatFS init/mount line — `desktop::init()` goes immediately after it.
+Note every `boot_screen::run` and `desktop::run` line. Note the SealFS init/mount line — `desktop::init()` goes immediately after it.
 
-- [ ] **Step 2: Add `desktop::init()` after BatFS mount.**
+- [ ] **Step 2: Add `desktop::init()` after SealFS mount.**
 
-Locate the line where BatFS is initialized/mounted in `main.rs`. Add immediately after:
+Locate the line where SealFS is initialized/mounted in `main.rs`. Add immediately after:
 
 ```rust
 ui::desktop::init();
 ```
 
-If the BatFS init line doesn't obviously exist, add `ui::desktop::init();` early in the boot sequence, after platform init but before the first `boot_screen::run()`. It's idempotent enough to be safe.
+If the SealFS init line doesn't obviously exist, add `ui::desktop::init();` early in the boot sequence, after platform init but before the first `boot_screen::run()`. It's idempotent enough to be safe.
 
 - [ ] **Step 3: Wrap boot_screen + desktop in a loop.**
 
@@ -1520,7 +1520,7 @@ main: lock/unlock cycle wraps boot_screen + desktop
 desktop in a loop so the workspace persists across the lock/unlock
 cycle (WM state is module-level static and is not reset by lock).
 
-`desktop::init()` is called once at boot, after BatFS is mounted, to
+`desktop::init()` is called once at boot, after SealFS is mounted, to
 load the topbar badge config from /system/desktop/topbar.cfg.
 
 Co-Authored-By: claude-flow <ruv@ruv.net>
@@ -1755,7 +1755,7 @@ git commit -m "$(cat <<'EOF'
 topbar: modal config sheet for toggling badges
 
 Click '...' opens a modal listing all 9 badges with a [x]/[ ]
-marker; clicking a row toggles the badge (persisted to BatFS).
+marker; clicking a row toggles the badge (persisted to SealFS).
 Esc or click-outside dismisses. Drag-reorder is a follow-up — v1
 ships toggle-only; re-ordering happens by toggling off + on again
 at the new end position.
@@ -1871,7 +1871,7 @@ That skill verifies the build is clean, then presents merge / PR / keep / discar
 | Palette inheritance from Wave 1 (5 colors + WATERMARK + SHADOW) | Tasks 3, 5, 7 |
 | Top bar — SPHRAGIS brand left, customizable badges right, ⋯ + ⏻ at end | Task 5 |
 | Default badges: NetMode, Deadman, Clock | Task 5 (`topbar_config::BADGES` initializer) |
-| Customizable badges with config sheet + BatFS persistence | Tasks 5 (storage) + 10 (sheet UI) |
+| Customizable badges with config sheet + SealFS persistence | Tasks 5 (storage) + 10 (sheet UI) |
 | 4×2 app grid, 8 apps named in spec | Tasks 1 + 6 |
 | Solid silhouette icon placeholders | Task 6 |
 | Launcher modes: Background / Overlay / Canvas | Tasks 6, 7 |

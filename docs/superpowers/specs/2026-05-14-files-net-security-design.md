@@ -96,17 +96,17 @@ Two modes, chosen by a printable-ASCII sniff on the first 256 decrypted bytes:
     encrypted · 8.0 KB
     preview requires cave context
     ```
-    in MID, centered vertically. Metadata strip still shows full info (size, MLS, owner cave name from BatFS metadata).
+    in MID, centered vertically. Metadata strip still shows full info (size, MLS, owner cave name from SealFS metadata).
 * Wave 4 does NOT implement cave-key switching UI. Operator switches via the CAVES app's `[E]nter` action first, then opens FILES.
 
 ### Actions
 
 | Hotkey | Label | Behavior |
 |--------|-------|----------|
-| `D` | `[D]elete` | Opens `ConfirmModal` with the file name + irreversibility warning. Second `D` calls `batfs::ns_delete(name)`. Selection drops to next file (or empty state). |
+| `D` | `[D]elete` | Opens `ConfirmModal` with the file name + irreversibility warning. Second `D` calls `sealfs::ns_delete(name)`. Selection drops to next file (or empty state). |
 | `E` | `[E]dit` | **Wave-5 stub.** Renders FAINT + `(Wave 5)`. Click / hotkey both no-op for now. |
 
-No `[O]pen` action — preview IS the open. No `[R]ename`, `[N]ew` — those need BatFS API work that's out of scope.
+No `[O]pen` action — preview IS the open. No `[R]ename`, `[N]ew` — those need SealFS API work that's out of scope.
 
 ### State machine
 
@@ -114,7 +114,7 @@ No `[O]pen` action — preview IS the open. No `[R]ename`, `[N]ew` — those nee
         ┌───────────────┐
         │   EMPTY       │   (no files)
         └───────┬───────┘
-                │ first batfs::ns_create
+                │ first sealfs::ns_create
                 ▼
         ┌───────────────┐
         │   VIEWING     │   (default: file selected, preview rendered)
@@ -124,7 +124,7 @@ No `[O]pen` action — preview IS the open. No `[R]ename`, `[N]ew` — those nee
         ┌────────────────────┐
         │  CONFIRM_DELETE    │   (modal overlay)
         └───────┬────────────┘
-                │ second D → batfs::ns_delete
+                │ second D → sealfs::ns_delete
                 ▼
         back to VIEWING (next file) or EMPTY
 ```
@@ -214,7 +214,7 @@ Cockpit. From top to bottom:
 |--------|-------|----------|
 | `R` | `[R]e-arm deadman` | Resets the deadman timer to its configured period (48h default). Instant — no confirm (the deadman doesn't fire by accident; the operator should be able to re-arm without friction). Calls `deadman::arm(hours)`. |
 | `V` | `[V]erify chain` | Walks the audit chain from genesis to head, verifying each entry's hash. Blocks for the duration (paints `chain: verifying…` in the AUDIT panel header). Result writes back to the header as `verified ok` or `verified FAIL @ entry N`. Calls `audit::verify_chain()`. |
-| `W` | `[W]ipe NOW` | Opens `ConfirmModal` listing what wipe destroys: all cave keys, BatFS, audit ring, MLS labels, taint records. Same modal widget as caves_mgr destroy. Second `W` calls `wipe::execute(WipeReason::Manual, false)`. **The `[W]ipe NOW` token renders in INK** (pure-mono discipline). |
+| `W` | `[W]ipe NOW` | Opens `ConfirmModal` listing what wipe destroys: all cave keys, SealFS, audit ring, MLS labels, taint records. Same modal widget as caves_mgr destroy. Second `W` calls `wipe::execute(WipeReason::Manual, false)`. **The `[W]ipe NOW` token renders in INK** (pure-mono discipline). |
 
 ### Removed from existing security.rs
 
@@ -336,9 +336,9 @@ Sketch only. The writing-plans skill produces the bite-sized plan next.
 * **TT rasterizer fix** — Wave 5.
 * **Backgrounded audit-chain verification** — Wave 4 blocks during verify; backgrounding adds threading complexity.
 * **NET activity filter UI** — `[F]ilter` action dropped.
-* **TAINT operator-defined bit dictionary** — hardcoded labels in Wave 4; dict file lives in `BatFS:/system/security/taint.toml` (or similar) in a later wave.
+* **TAINT operator-defined bit dictionary** — hardcoded labels in Wave 4; dict file lives in `SealFS:/system/security/taint.toml` (or similar) in a later wave.
 * **Per-cave NET enforcement** — Wave 3 stored `Cave.net_mode`; Wave 4 still uses global isolation. Per-cave routing/firewall is kernel work.
-* **BatFS rename / new-file APIs** — neither FILES nor any other app needs them in Wave 4.
+* **SealFS rename / new-file APIs** — neither FILES nor any other app needs them in Wave 4.
 * **Animations or transitions.**
 * **Right-click context menus.**
 

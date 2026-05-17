@@ -39,7 +39,7 @@ Sphragis is a security-first, bare-metal Rust microkernel for Apple Silicon (M4 
 - Kernel-mediated attestation primitive (every cave is an attestable identity)
 - Tamper-evident HMAC-chained audit ring (planned upgrade SHA-256 → SHA-384 per SP-C4.1)
 - Two-person-integrity quorum on high-consequence privileged operations
-- BatFS encrypted filesystem with AES-256-GCM-SIV at-rest + per-cave + per-file keys
+- SealFS encrypted filesystem with AES-256-GCM-SIV at-rest + per-cave + per-file keys
 - Mandatory access control: Bell-LaPadula sensitivity + Biba integrity + CIPSO/CALIPSO network labels + SELinux-style type-enforcement
 - Hardware-rooted exploit mitigations: PAN, BTI, per-cave ASIDs, FEAT_SB Spectre barriers, stack canaries from RNDR
 
@@ -56,7 +56,7 @@ The TOE includes:
 | Drivers (first-party) | `src/drivers/` | M4 Apple Silicon + virtio + QEMU support |
 | Cave isolation runtime | `src/caves/cave.rs`, `src/caves/linux/` | Per-cave page tables, syscall filter, Linux ABI shim |
 | Cryptographic module | `src/crypto/` | All CNSA-2.0 + legacy crypto primitives + policy gate |
-| BatFS encrypted filesystem | `src/fs/` | At-rest AEAD encryption with per-cave + per-file keys |
+| SealFS encrypted filesystem | `src/fs/` | At-rest AEAD encryption with per-cave + per-file keys |
 | Network stack | `src/net/` | TLS 1.3 + WireGuard + X.509 + DNS + NAT + firewall |
 | Attestation primitive | `src/security/attest.rs` | Kernel-mediated quote production |
 | Audit subsystem | `src/security/audit.rs`, `audit_chain.rs` | 24-category event ring with HMAC chain |
@@ -235,7 +235,7 @@ Selected SFRs from CC Part 2 catalogue plus the extended components above. Itera
 | FCS_PQS.1 (PQ Signature, EXTENDED) | ML-DSA-87 per `src/crypto/pq_cnsa.rs` |
 | FCS_SHB.1 (Stateful Hash-Based Sig, EXTENDED) | LMS per `src/crypto/lms.rs` |
 | FCS_RBG_EXT.1 (Random Bit Generation) | SHA-256-chained DRBG seeded from RNDR; fail-closed strict variant in gov-strict build |
-| FCS_STO_EXT.1 (Stored Sensitive Data) | BatFS AES-256-GCM-SIV with per-cave + per-file keys |
+| FCS_STO_EXT.1 (Stored Sensitive Data) | SealFS AES-256-GCM-SIV with per-cave + per-file keys |
 
 ### 6.2 User Data Protection (FDP)
 
@@ -244,7 +244,7 @@ Selected SFRs from CC Part 2 catalogue plus the extended components above. Itera
 | FDP_ACC.1 (Access Control Scope) | Cave-policy gate enforces every cross-cave access |
 | FDP_ACF.1 (Access Control Rules) | Per-cave page tables + cave-policy table + type-enforcement deny matrix |
 | FDP_IFC.1 (Information Flow Control Scope) | Bell-LaPadula sensitivity + Biba integrity labels |
-| FDP_IFF.1 (Information Flow Control Rules) | CIPSO/CALIPSO IPv4/IPv6 packet labels; BatFS AAD-bound classification |
+| FDP_IFF.1 (Information Flow Control Rules) | CIPSO/CALIPSO IPv4/IPv6 packet labels; SealFS AAD-bound classification |
 | FDP_CAV.1 (Cave Isolation, EXTENDED) | Per-cave L1 + per-cave ASIDs + per-cave AF_UNIX namespace |
 
 ### 6.3 Identification and Authentication (FIA)
@@ -298,7 +298,7 @@ Selected SFRs from CC Part 2 catalogue plus the extended components above. Itera
 | FAU_GEN.2 (User Identity Association) | Cave_id captured per record (audit-CAVE-M3) |
 | FAU_SAR.1 (Audit Review) | `audit::recent` + `audit::recent_for_cave` (SP-ISO-009 cave-scoped); offline verifier (SP-AUD-004) |
 | FAU_STG.1 (Audit Storage Protection) | HMAC-chained ring (audit-week-3-4); planned SP-AUD-002 WORM export |
-| FAU_STG.2 (Guarantees of Audit Data Availability) | Single-writer ring; flush-to-BatFS for durability |
+| FAU_STG.2 (Guarantees of Audit Data Availability) | Single-writer ring; flush-to-SealFS for durability |
 | FAU_STG.3 (Action in Case of Possible Audit Data Loss) | EVICTED counter + UART warning on first ring rollover |
 
 ---

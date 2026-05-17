@@ -17,7 +17,7 @@ Bake the pubkey in the kernel build:
     cargo build --release ...
 
 Verify on Sphragis (shell):
-    release-verify <batfs-file> <sig-hex>
+    release-verify <sealfs-file> <sig-hex>
 """
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def sign(path: str) -> int:
     print(f"[ok] sig:     {sig.hex()}")
     print(f"     pubkey:  {pub_hex(sk)}")
     print(f"     verify on Sphragis:")
-    print(f"       release-verify <batfs-filename> {sig.hex()}")
+    print(f"       release-verify <sealfs-filename> {sig.hex()}")
     return 0
 
 

@@ -15,7 +15,7 @@ topic: security · audit
 - Signature verification failures
 - Lock-screen transitions (lock, unlock, dead-man's-switch fires)
 - TLS handshake outcomes (PQ negotiation, chain anchor)
-- Filesystem seal/unseal events on BatFS
+- Filesystem seal/unseal events on SealFS
 - Driver init failures
 
 What does *not* go in: timing data fine enough to use as a side channel, plaintext of payloads, anything that would reverse-engineer a secret.
@@ -29,8 +29,8 @@ This means: an attacker who pwns a cave cannot forge an entry, suppress an entry
 ## Storage layout
 
 - 1024 entries (current default). Spillover semantics are still being decided — overwrite vs. seal-and-rotate is an [open question in [[_generated/src/security/audit/mod.rs]]].
-- Each entry is fixed-size and sealed under the same master key as [[Cryptography Stack|BatFS]]. AEAD: ChaCha20-Poly1305.
-- The ring lives in BatFS as a special file but is mapped read-write by the kernel only. User caves cannot stat or read it directly.
+- Each entry is fixed-size and sealed under the same master key as [[Cryptography Stack|SealFS]]. AEAD: ChaCha20-Poly1305.
+- The ring lives in SealFS as a special file but is mapped read-write by the kernel only. User caves cannot stat or read it directly.
 
 ## How callers use it
 
@@ -51,7 +51,7 @@ The function returns nothing — there is no error path. If recording fails, the
 
 Enough for a session of work, not enough for a deployment. The number is tuned so an operator can scroll through a session's worth of events; an attacker generating noise to push real events out of the ring would have to generate 1000+ events, which is itself an audit signal.
 
-For long-running systems, the ring will rotate. The pre-rotate slice is sealed and persisted to BatFS as a numbered file (`audit.0`, `audit.1`, …). The unsealed-in-memory window is always the latest 1024.
+For long-running systems, the ring will rotate. The pre-rotate slice is sealed and persisted to SealFS as a numbered file (`audit.0`, `audit.1`, …). The unsealed-in-memory window is always the latest 1024.
 
 ## What the operator sees
 
@@ -61,7 +61,7 @@ The shell has a `audit` command (in [[_generated/src/ui/shell.rs]]) that decrypt
 #247  DENY  out 8.8.8.8:53 · cave my-app
 #246  AUTH  passphrase · session #4
 #245  DERIV argon2id 8 MiB / 3p
-#244  SEAL  batfs / boot.log
+#244  SEAL  sealfs / boot.log
 #243  TLS   ml-kem-768 · ISRG X1
 #242  VRFY  firmware sig · ok
 ```
@@ -72,7 +72,7 @@ Each entry has a category, a one-line description, and the originating cave. The
 
 - [[_generated/src/security/audit]] — the implementation
 - [[Concepts/Cave Isolation Model]] — caves are who generates events
-- [[Concepts/Cryptography Stack]] — same AEAD as BatFS
+- [[Concepts/Cryptography Stack]] — same AEAD as SealFS
 - [[_generated/DESIGN_CAVES.md]] — design doc that calls out the ring's role
 
 ## Open

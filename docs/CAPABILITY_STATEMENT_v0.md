@@ -67,7 +67,7 @@ We are an unfunded pre-incorporation project (~14 weeks of focused engineering a
 - SBOM per release (`scripts/gen_sbom.py`)
 - SLSA L4 architecture + sigstore/Rekor release-signing IMPL drafted (`DESIGN_SLSA_PROVENANCE.md`, `DESIGN_SIGSTORE_REKOR.md`, `.github-workflows-pending/release-sign.yml` + `tools/release-verifier/verify.sh`)
 - LMS-signed kernel boot verification designed (`DESIGN_LMS_KERNEL_SIGNING.md`)
-- WORM audit segment export to BatFS (`src/security/audit_worm.rs`) with HMAC-SHA-384 chain across segments + offline verifier (`tools/audit-verifier/ --worm-dir`)
+- WORM audit segment export to SealFS (`src/security/audit_worm.rs`) with HMAC-SHA-384 chain across segments + offline verifier (`tools/audit-verifier/ --worm-dir`)
 
 ### 5. CHERI-ready architecture
 
@@ -83,8 +83,8 @@ We are an unfunded pre-incorporation project (~14 weeks of focused engineering a
 | Microkernel + cave isolation | TRL 6 (boots on real M4 + comprehensive QEMU CI) |
 | CNSA 2.0 crypto + boot KATs | TRL 7 (production-grade primitives) |
 | Attestation primitive | TRL 6 (API + measurement + per-cave registry + wire format + offline verifier; hardware-rooting designs landed) |
-| BatFS encrypted filesystem | TRL 7 (AES-256-GCM-SIV; per-cave + per-file keys) |
-| Audit chain | TRL 7 (HMAC-SHA-384 tamper-evident + WORM export to BatFS) |
+| SealFS encrypted filesystem | TRL 7 (AES-256-GCM-SIV; per-cave + per-file keys) |
+| Audit chain | TRL 7 (HMAC-SHA-384 tamper-evident + WORM export to SealFS) |
 | Window manager + multi-app UI | TRL 4 (design landed; implementation pending) |
 | Multi-hardware (x86_64) | TRL 3 (design landed; implementation pending) |
 | Formal verification | TRL 4 (harness scaffolded; SP-VER-001 + SP-VER-002 Verus proof specs landed; proof IMPL pending — DARPA-funding sought) |

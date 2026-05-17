@@ -297,7 +297,7 @@ The user's existing memory says "avoid GPL/AGPL deps in Bat_OS; preserve proprie
 | `src/ai/` | 5,327 | AGENT app backing — needs careful consideration for gov pivot |
 | `src/security/` | 3,235 | Audit chain, capability system |
 | `src/crypto/` | 3,005 | Primitives — see §5.4 |
-| `src/fs/` | 1,848 | BatFS encrypted filesystem |
+| `src/fs/` | 1,848 | SealFS encrypted filesystem |
 | `src/main.rs` | 2,220 | Kernel entry |
 
 **TCB estimate**: most of `src/` runs at EL1 today (microkernel-shaped but not pure microkernel — fs, net, drivers, audit all kernel-mode). **Realistic TCB ~70-80K LoC.** This is **far smaller than Linux (~30M)** but **far larger than seL4 (~10K C + proof corpus)**. For formal verification of a critical subsystem (#1 differentiator), we'd target 5-10K LoC.
@@ -313,7 +313,7 @@ adt, agx (GPU), aic (interrupt controller), ane (Neural Engine), ans/ans_nvme (s
 
 ### 5.3 Test infrastructure
 
-**~80 QMP-driven self-test scripts in `scripts/`** covering: audit chain, audit seal, BatFS quotas, beacon, BIBA (integrity model), block devices, boot smoke, busybox baseline, byte-rate E2E, CALIPSO labels, cave policy, cave private isolation, conntrack, CPOL (cave policy), Docker caves, exec translation, flow rate, firewall hardening, GCM, heap guard, HTTPS smoke, kali (red-team), MLS binding, MLS IPC, mount namespaces, multi-NIC, NAT (many variants), NetProbe, OCSP, OTP, PQ demo, PQ interop, redirect, seal, secmark, selftests aggregator, SNI, sys-caves, sys-wg, syscall filter, taint, te (type enforcement), TPI, unified cave demo, vmnet/scapy E2E, wg dispatch/endpoint/handshake/initiator/peer/replay/wire.
+**~80 QMP-driven self-test scripts in `scripts/`** covering: audit chain, audit seal, SealFS quotas, beacon, BIBA (integrity model), block devices, boot smoke, busybox baseline, byte-rate E2E, CALIPSO labels, cave policy, cave private isolation, conntrack, CPOL (cave policy), Docker caves, exec translation, flow rate, firewall hardening, GCM, heap guard, HTTPS smoke, kali (red-team), MLS binding, MLS IPC, mount namespaces, multi-NIC, NAT (many variants), NetProbe, OCSP, OTP, PQ demo, PQ interop, redirect, seal, secmark, selftests aggregator, SNI, sys-caves, sys-wg, syscall filter, taint, te (type enforcement), TPI, unified cave demo, vmnet/scapy E2E, wg dispatch/endpoint/handshake/initiator/peer/replay/wire.
 
 Plus boot smoke and cave private selftest run as part of every audit-remediation week.
 
@@ -322,7 +322,7 @@ Plus boot smoke and cave private selftest run as part of every audit-remediation
 | CNSA 2.0 Requirement | Sphragis Status |
 |---|---|
 | AES-256 (FIPS 197) | ✅ `aes.rs` (481 LoC), `aes_xts.rs`, plus RustCrypto `aes` crate |
-| AES-GCM-SIV | ✅ via `aes-gcm-siv` crate (BatFS at-rest, week 8 elite-tier) |
+| AES-GCM-SIV | ✅ via `aes-gcm-siv` crate (SealFS at-rest, week 8 elite-tier) |
 | AES-GCM | ✅ `gcm_verified.rs` (390 LoC) |
 | AES-XTS | ✅ `aes_xts.rs` + `xts-mode` crate |
 | SHA-384 | ✅ `sha384.rs` (121 LoC) |
@@ -342,7 +342,7 @@ From the 14-week audit-remediation:
 - **BTI enforcement** via SCTLR_EL1.BT0/BT1 (week 9 elite-tier)
 - **Per-cave ASIDs** in TTBR0_EL1 via TCR.AS=1 (week 11 elite-tier)
 - **HMAC-keyed audit chain** with RNDR-seeded kernel-only key (week 3-4)
-- **BatFS AES-256-GCM-SIV** at-rest (week 8 elite-tier; misuse-resistant AEAD)
+- **SealFS AES-256-GCM-SIV** at-rest (week 8 elite-tier; misuse-resistant AEAD)
 - **X25519 via dalek** (week 6, removed 267 LoC hand-rolled)
 - **TLS handshake order validation** (week 1, Crypto-F1+F2)
 - **Per-cave SPKI pinning** + revocation (week 1, Crypto-F3+F4)
@@ -390,7 +390,7 @@ target/aarch64-unknown-none/release/sphragis
 - ❌ **POSIX userspace toolbox** — Linux ABI shim exists (`src/caves/linux/`) but narrow; no `vim`, `git`, `python`, `ssh`, `tmux`
 - ❌ **Bluetooth/WiFi UX layer** (M4 has `bcm_wifi.rs` driver-level but no userspace networking config)
 - ❌ **Multi-hardware support** beyond M4 + QEMU virt aarch64 (no x86_64, no other ARM SoCs, no RISC-V)
-- ❌ **Attestation primitives** as kernel API (we have BatFS HMAC seal but no TPM/SEP/Caliptra hookup)
+- ❌ **Attestation primitives** as kernel API (we have SealFS HMAC seal but no TPM/SEP/Caliptra hookup)
 - ❌ **Formal verification harness** (no Verus, Kani, or Coq/Isabelle setup)
 - ❌ **CHERI-readiness** (no capability-hardware abstraction)
 - ❌ **Reproducible build verified end-to-end** (check script exists, but unclear it passes)
@@ -398,7 +398,7 @@ target/aarch64-unknown-none/release/sphragis
 
 ### 5.10 Sphragis-in-one-paragraph (for competitive comparison)
 
-Sphragis is a security-first, ~100K-LoC bare-metal Rust OS for Apple Silicon, with a microkernel-shaped architecture organized around capability-isolated processes ("caves"). It boots on real M4 hardware via independent reverse engineering (Asahi doesn't support M4 yet), runs an encrypted filesystem (BatFS, AES-256-GCM-SIV at rest), an HMAC-chained audit ring, a TLS+X.509 stack with PQ-hybrid key exchange, and 8 in-OS apps under a lock-screen-gated single-app UX. 14 weeks of mechanical-trace audit remediation have closed 14 critical and 17 high-severity findings plus three elite-tier hardening items (BatFS GCM-SIV, BTI enforcement, per-cave ASIDs). The codebase is currently AGPL-3.0-or-later, has no installer, no formal-verification harness, no kernel-mediated attestation, no CHERI plumbing, no LMS/XMSS, and no multi-hardware target beyond M4 and QEMU.
+Sphragis is a security-first, ~100K-LoC bare-metal Rust OS for Apple Silicon, with a microkernel-shaped architecture organized around capability-isolated processes ("caves"). It boots on real M4 hardware via independent reverse engineering (Asahi doesn't support M4 yet), runs an encrypted filesystem (SealFS, AES-256-GCM-SIV at rest), an HMAC-chained audit ring, a TLS+X.509 stack with PQ-hybrid key exchange, and 8 in-OS apps under a lock-screen-gated single-app UX. 14 weeks of mechanical-trace audit remediation have closed 14 critical and 17 high-severity findings plus three elite-tier hardening items (SealFS GCM-SIV, BTI enforcement, per-cave ASIDs). The codebase is currently AGPL-3.0-or-later, has no installer, no formal-verification harness, no kernel-mediated attestation, no CHERI plumbing, no LMS/XMSS, and no multi-hardware target beyond M4 and QEMU.
 
 ---
 

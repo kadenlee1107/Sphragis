@@ -84,10 +84,10 @@ pub fn execute(reason: WipeReason, silent: bool) {
     // ui/apps/security.rs); without flushing first, that entry
     // would die with the in-RAM ring when wipe_memory zeros every
     // frame in Phase 5. After this flush the entry survives on
-    // BatFS until wipe_filesystem deletes audit.log (Phase 2) — a
+    // SealFS until wipe_filesystem deletes audit.log (Phase 2) — a
     // forensic reviewer who recovers the encrypted audit.log
     // sector before the disk-zero pass has a chance to recover it.
-    let _ = crate::security::audit::flush_to_batfs();
+    let _ = crate::security::audit::flush_to_sealfs();
 
     // Phase 1: Caves destroyed first (in-RAM state).
     crate::caves::cave::destroy_all();
@@ -141,12 +141,12 @@ pub fn execute_and_halt(reason: WipeReason) -> ! {
 }
 
 /// AUDIT-FS-C2 (2026-05-15): destroy_keys() previously called
-/// `batfs::init(&zero_key)` followed by `init(&poison)`, expecting
-/// the calls to overwrite the master key. But `batfs::init` returns
+/// `sealfs::init(&zero_key)` followed by `init(&poison)`, expecting
+/// the calls to overwrite the master key. But `sealfs::init` returns
 /// early when `INITIALIZED == true`, so the real master key was
 /// never zeroed and the "Encryption keys destroyed" line was a lie.
 ///
-/// Now calls the explicit `batfs::wipe_master_key()` which:
+/// Now calls the explicit `sealfs::wipe_master_key()` which:
 ///   * Zeroes MASTER_KEY, BOOT_NONCE_PREFIX, FILES[].nonce/.hash,
 ///     FILE_TAINT[], FILE_COUNT under IrqGuard.
 ///   * Flips INITIALIZED back to false.
@@ -155,7 +155,7 @@ pub fn execute_and_halt(reason: WipeReason) -> ! {
 /// so the key was still available for each delete()'s AEAD AAD
 /// computation.
 fn destroy_keys() {
-    crate::fs::batfs::wipe_master_key();
+    crate::fs::sealfs::wipe_master_key();
 
     if !WIPE_SILENT.load(Ordering::Relaxed) {
         platform::serial_puts("  [wipe] Encryption keys destroyed (master + nonce prefix + per-file tags zeroed)\n");
@@ -169,7 +169,7 @@ fn wipe_filesystem() {
     let mut name_lens = [0usize; 128];
     let mut count = 0;
 
-    crate::fs::batfs::list(|name, _size, _enc| {
+    crate::fs::sealfs::list(|name, _size, _enc| {
         if count < 128 {
             let bytes = name.as_bytes();
             let len = bytes.len().min(64);
@@ -181,7 +181,7 @@ fn wipe_filesystem() {
 
     for i in 0..count {
         let name = unsafe { core::str::from_utf8_unchecked(&names[i][..name_lens[i]]) };
-        let _ = crate::fs::batfs::delete(name);
+        let _ = crate::fs::sealfs::delete(name);
     }
 
     if !WIPE_SILENT.load(Ordering::Relaxed) {
@@ -237,9 +237,9 @@ pub fn is_wiped() -> bool {
 
 /// V8-ROOT-6: best-effort in-memory secret wipe for panic-handler use.
 /// Does NOT destroy the disk — the kernel has already failed and any
-/// disk write we attempt could corrupt BatFS. Instead, just zero the
+/// disk write we attempt could corrupt SealFS. Instead, just zero the
 /// things an attacker with a cold-boot/DRAM-extraction primitive would
-/// want: auth hashes, TLS session keys, and the BatFS master key.
+/// want: auth hashes, TLS session keys, and the SealFS master key.
 ///
 /// Safe to call from the panic handler (no allocations, no locks, no
 /// I/O that could re-panic).
@@ -248,8 +248,8 @@ pub fn emergency_wipe() {
     // closure. If any sub-wipe panics we still attempt the others.
     unsafe { crate::security::auth::panic_wipe(); }
     unsafe { crate::net::tls::panic_wipe(); }
-    unsafe { crate::fs::batfs::panic_wipe(); }
+    unsafe { crate::fs::sealfs::panic_wipe(); }
     // V8-ROOT-6 (regression fix): the RNG chain state can derive any TLS
-    // ClientRandom or BatFS nonce issued post-reseed. Wipe it too.
+    // ClientRandom or SealFS nonce issued post-reseed. Wipe it too.
     unsafe { crate::crypto::rng::panic_wipe(); }
 }

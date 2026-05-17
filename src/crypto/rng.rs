@@ -13,7 +13,7 @@
 //
 // This is the same core the `sys_getrandom` syscall uses, extracted
 // so kernel-side crypto (TLS X25519 keypair generation, TLS client
-// random, BatFS nonce derivation) can also use it instead of
+// random, SealFS nonce derivation) can also use it instead of
 // reading `cntpct_el0` directly.
 
 #![allow(dead_code)]
@@ -236,7 +236,7 @@ pub fn random_32() -> [u8; 32] {
 // hardware, containers) bootable.
 //
 // For gov-grade keygen (operator CA root keys, attestation root
-// keys, BatFS master keys, etc.), callers should route through the
+// keys, SealFS master keys, etc.), callers should route through the
 // strict variants below instead. They fail-closed on any RNDR
 // absence or stall, so a degraded entropy source produces an error
 // rather than weak key material. The future `sphragis-gov` build
@@ -284,7 +284,7 @@ pub fn require_hw_rng_or_halt() {
 ///
 /// On success, `buf` is filled identically to `fill_bytes`. Callers
 /// that need gov-grade entropy guarantees (operator CA private-key
-/// generation, attestation root keys, BatFS master keys, ML-KEM-1024 /
+/// generation, attestation root keys, SealFS master keys, ML-KEM-1024 /
 /// ML-DSA-87 keygen in the gov build profile) should use this instead
 /// of `fill_bytes`.
 pub fn fill_bytes_strict(buf: &mut [u8]) -> Result<(), &'static str> {

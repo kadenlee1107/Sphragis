@@ -78,7 +78,7 @@ def main() -> int:
             (rb"\[bc\] Cave runtime ready", "Cave init"),
             (rb"\[net\] Network stack ready",   "network init"),
             (rb"\[gpu\] (Found at slot|Display: \d+x\d+)", "virtio-gpu init"),
-            (rb"\[fs\] BatFS initialized",     "BatFS init"),
+            (rb"\[fs\] SealFS initialized",     "SealFS init"),
             (rb"\[tls\] trust store: \d+ CA roots, chain-only auth, hybrid PQ on",
              "tls trust-store boot status"),
         ]

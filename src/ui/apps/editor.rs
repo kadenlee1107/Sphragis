@@ -11,7 +11,7 @@ use crate::ui::widgets::{
     paint_confirm_modal, confirm_modal_key, ConfirmModal, ModalAction,
 };
 use crate::ui::wm::{self, WindowRect};
-use crate::fs::batfs;
+use crate::fs::sealfs;
 use crate::drivers::virtio::keyboard::{
     KEY_ARROW_UP, KEY_ARROW_DOWN, KEY_ARROW_LEFT, KEY_ARROW_RIGHT,
     KEY_SHIFT_ARROW_UP, KEY_SHIFT_ARROW_DOWN,
@@ -127,7 +127,7 @@ pub fn paint(body: WindowRect) {
             paint_confirm_modal(&ConfirmModal {
                 title: "Discard unsaved changes and revert?",
                 body_lines: &[
-                    "  reload from BatFS",
+                    "  reload from SealFS",
                     "  discard the current buffer",
                 ],
                 commit_key: 'R',
@@ -345,7 +345,7 @@ fn handle_key_editing(c: u8) -> AppEvent {
         // type those letters into the buffer without triggering the
         // action. (Wave 6 fix: unmodified hotkeys collided with text
         // input.)
-        0x13 if dirty() => { save_to_batfs(); AppEvent::Repaint }
+        0x13 if dirty() => { save_to_sealfs(); AppEvent::Repaint }
         0x12 if dirty() => {
             unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::ConfirmRevert; }
             AppEvent::Repaint
@@ -575,13 +575,13 @@ fn newline() {
     set_dirty();
 }
 
-// ── BatFS I/O ────────────────────────────────────────────────────
+// ── SealFS I/O ────────────────────────────────────────────────────
 
 /// Public shim for the shell's `edit <filename>` command (pre-Wave-5
 /// call site in shell.rs). Returns Ok on load or Err with a static
 /// message so the shell can print it. The status-strip error slot is
 /// also populated on failure.
-pub fn load_from_batfs(name: &str) -> Result<(), &'static str> {
+pub fn load_from_sealfs(name: &str) -> Result<(), &'static str> {
     load_file(name);
     // Check whether the load populated an error.
     let err_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LOAD_ERR_LEN)) };
@@ -612,7 +612,7 @@ fn load_file(name: &str) {
     }
     // Read into a temp staging buffer, then split on \n into lines.
     let mut staging = [0u8; MAX_LINES * MAX_LINE_LEN];
-    let bytes_read = match batfs::ns_read(name, &mut staging) {
+    let bytes_read = match sealfs::ns_read(name, &mut staging) {
         Ok(n) => n,
         Err(e) => {
             store_load_err(e.as_bytes());
@@ -660,7 +660,7 @@ fn parse_into_lines(bytes: &[u8]) {
     unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TRUNCATED), truncated); }
 }
 
-fn save_to_batfs() {
+fn save_to_sealfs() {
     let name_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) };
     if name_len == 0 { return; }
     let name_bytes = unsafe { let arr = &*core::ptr::addr_of!(FILE_NAME); &arr[..name_len] };
@@ -684,8 +684,8 @@ fn save_to_batfs() {
     }
 
     // Overwrite via delete + create (matches shell.rs's `write` command).
-    let _ = batfs::ns_delete(name);
-    match batfs::ns_create(name, &tmp[..n]) {
+    let _ = sealfs::ns_delete(name);
+    match sealfs::ns_create(name, &tmp[..n]) {
         Ok(()) => {
             unsafe {
                 core::ptr::write_volatile(core::ptr::addr_of_mut!(DIRTY), false);

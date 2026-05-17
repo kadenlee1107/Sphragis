@@ -248,7 +248,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     security::audit_chain::init_audit_key();
 
     // SP-AUD-002 (2026-05-16): initialize the WORM segment buffer so
-    // subsequent audit::record calls also persist a copy to BatFS
+    // subsequent audit::record calls also persist a copy to SealFS
     // segments. Must follow init_audit_key (worm uses the same key
     // for the segment-chain HMAC) and precede any audit::record.
     security::audit_worm::init();
@@ -282,7 +282,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 
     // AUDIT-CRYPTO-F7 (2026-05-15): fail-closed boot-time crypto
     // self-tests. Run KATs for every primitive used in production
-    // BEFORE any TLS / BatFS / IPC mount. The prior pattern was to
+    // BEFORE any TLS / SealFS / IPC mount. The prior pattern was to
     // print "FAIL: <reason>" and continue, which silently shipped
     // broken crypto. Now: any KAT failure panics — kernel halts
     // before it can encrypt or decrypt anything with a broken
@@ -381,10 +381,10 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     drivers::uart::puts("  [auth] Max attempts: 5\n");
     drivers::uart::puts("  [auth] Duress code: ARMED\n");
 
-    // ATTACK-CRYPTO-004: derive BatFS master key from the passphrase
+    // ATTACK-CRYPTO-004: derive SealFS master key from the passphrase
     // plus a boot-mixed salt instead of using a hex constant baked
     // into the kernel image. Anyone with the binary used to be able
-    // to decrypt every BatFS file — the key was literally
+    // to decrypt every SealFS file — the key was literally
     // `BA 70 05 BA 70 05 BA 70 DE AD BE EF ...` in the ELF.
     //
     // Real device-level KDF (Argon2id against a unique device salt)
@@ -393,22 +393,22 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // Slow enough to blunt brute force against the binary alone, but
     // still deterministic per (passphrase, kernel_hash_seed) so the
     // same build + passphrase produces the same key across reboots.
-    // virtio-blk MUST init before BatFS so that
-    // BatFS can mount its on-disk format from sector 0. Without a disk
-    // BatFS still works — it falls back to in-RAM-only mode and warns —
-    // but with one attached, BatFS will persist across reboots.
+    // virtio-blk MUST init before SealFS so that
+    // SealFS can mount its on-disk format from sector 0. Without a disk
+    // SealFS still works — it falls back to in-RAM-only mode and warns —
+    // but with one attached, SealFS will persist across reboots.
     drivers::uart::puts("[boot] Initializing block device...\n");
     match drivers::virtio::blk::init() {
         Some(()) => drivers::uart::puts("  [blk] Block device ready\n"),
-        None    => drivers::uart::puts("  [blk] No block device (RAM-only BatFS)\n"),
+        None    => drivers::uart::puts("  [blk] No block device (RAM-only SealFS)\n"),
     }
 
-    // Derive the BatFS key from the same passphrase we just prompted for.
-    let master_key = derive_batfs_key(passphrase_slice);
-    fs::batfs::init(&master_key);
-    drivers::uart::puts("  [fs] BatFS initialized (ChaCha20-Poly1305 AEAD, Argon2id-derived master)\n");
+    // Derive the SealFS key from the same passphrase we just prompted for.
+    let master_key = derive_sealfs_key(passphrase_slice);
+    fs::sealfs::init(&master_key);
+    drivers::uart::puts("  [fs] SealFS initialized (ChaCha20-Poly1305 AEAD, Argon2id-derived master)\n");
 
-    // restore audit ring from BatFS-persisted /audit.log
+    // restore audit ring from SealFS-persisted /audit.log
     // (written by a prior boot's `audit-flush`). Lets the operator's
     // `audit` command show historical events across reboots — without
     // this, an attacker who panics post-exploit erases their tracks.
@@ -417,7 +417,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         static mut RESTORE_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
         unsafe {
             let buf = &mut *core::ptr::addr_of_mut!(RESTORE_BUF);
-            match fs::batfs::read("audit.log", buf) {
+            match fs::sealfs::read("audit.log", buf) {
                 Ok(n) if n > 0 => {
                     let restored = security::audit::restore_from_persisted(&buf[..n]);
                     drivers::uart::puts("  [audit] restored ");
@@ -872,19 +872,22 @@ fn run_https_smoke() {
     uart::puts("\n");
 }
 
-/// Derive the BatFS master key from the passphrase via Argon2id (8 MiB
+/// Derive the SealFS master key from the passphrase via Argon2id (8 MiB
 /// × 3 passes × 1 lane), matching the auth-gate KDF parameters. Salt
-/// is domain-separated so the BatFS master and the auth hash differ
+/// is domain-separated so the SealFS master and the auth hash differ
 /// for the same passphrase. Falls back to a legacy SHA-256 path if
 /// Argon2 rejects the input (length out of range etc) so first-boot
 /// edge cases stay functional; the fallback audit-logs at run time.
-fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
+fn derive_sealfs_key(passphrase: &[u8]) -> [u8; 32] {
     use argon2::{Argon2, Algorithm, Version, Params};
 
     // Distinct from auth.rs's "sphragis-auth-v2" so the two derivations
     // produce different outputs for the same passphrase — domain
     // separation. bumps the version tag so anyone migrating
     // from the pre-Argon2 master key sees a clean break.
+    // Historical salt string from the Bat_OS naming era. Preserve
+    // the exact bytes so existing keystores still derive correctly
+    // after the SealFS rename.
     const SALT: &[u8; 18] = b"sphragis-batfs-v3\0";
     const MEM_KIB: u32 = 8_192;       // 8 MiB
     const TIME_COST: u32 = 3;
@@ -908,16 +911,21 @@ fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
     // conscious operator notices the fallback fired.
     crate::security::audit::record(
         crate::security::audit::Category::Cave,
-        b"WARN: BatFS KDF Argon2id failed, falling back to SHA-256",
+        b"WARN: SealFS KDF Argon2id failed, falling back to SHA-256",
     );
-    derive_batfs_key_sha_fallback(passphrase)
+    derive_sealfs_key_sha_fallback(passphrase)
 }
 
-/// Legacy 16-round SHA-256 BatFS KDF. Retained as the Argon2id failure
+/// Legacy 16-round SHA-256 SealFS KDF. Retained as the Argon2id failure
 /// fallback so a malformed-passphrase edge case can't brick the OS.
 /// Domain-separated from the Argon2id output so an attacker who learns
 /// one cannot derive the other.
-fn derive_batfs_key_sha_fallback(passphrase: &[u8]) -> [u8; 32] {
+fn derive_sealfs_key_sha_fallback(passphrase: &[u8]) -> [u8; 32] {
+    // Historical salt from the Bat_OS naming era. Preserve the exact
+    // bytes so that any existing keystore derived under the old name
+    // still validates after the SealFS rename — changing the salt
+    // would silently break passphrase-driven key derivation on every
+    // pre-existing installation.
     const KERNEL_SALT: [u8; 16] = *b"batfs-fallback\0\0";
 
     let mut buf = [0u8; 128];
@@ -1319,8 +1327,8 @@ fn apple_run_cmd(line: &str) {
 /// Post-splash kernel self-test for the M4 path. Exercises the real
 /// live paths that were hardened this session: `mm::frame::alloc_frame`
 /// (load+store under IrqGuard instead of `compare_exchange_weak`),
-/// `rng::fill_bytes` (non-atomic CTR), and the `fs::batfs` encrypted
-/// create+read round-trip (which also reaches `batfs::next_nonce`,
+/// `rng::fill_bytes` (non-atomic CTR), and the `fs::sealfs` encrypted
+/// create+read round-trip (which also reaches `sealfs::next_nonce`,
 /// the new `NONCE_COUNTER` load+store, and AES-CTR + HMAC-SHA256
 /// MAC verification).
 // /
@@ -1361,20 +1369,20 @@ fn apple_kernel_self_test() {
         }
     }
 
-    // Test 2: BatFS create (exercises rng::fill_bytes → sha256 KDF
+    // Test 2: SealFS create (exercises rng::fill_bytes → sha256 KDF
     // → AES-CTR encrypt → HMAC-SHA256 tag → NONCE_COUNTER advance).
     const NAME: &str = "selftest.txt";
     const PLAINTEXT: &[u8] = b"Hello from Sphragis on real Apple M4 silicon.";
-    uart::puts("[selftest] batfs::create(\""); uart::puts(NAME); uart::puts("\") ... ");
-    match fs::batfs::create(NAME, PLAINTEXT) {
+    uart::puts("[selftest] sealfs::create(\""); uart::puts(NAME); uart::puts("\") ... ");
+    match fs::sealfs::create(NAME, PLAINTEXT) {
         Ok(()) => uart::puts("OK\n"),
         Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
     }
 
-    // Test 3: BatFS read+verify round-trip (HMAC before decrypt).
-    uart::puts("[selftest] batfs::read+verify ... ");
+    // Test 3: SealFS read+verify round-trip (HMAC before decrypt).
+    uart::puts("[selftest] sealfs::read+verify ... ");
     let mut out = [0u8; 128];
-    match fs::batfs::read(NAME, &mut out) {
+    match fs::sealfs::read(NAME, &mut out) {
         Ok(n) => {
             if n == PLAINTEXT.len() && &out[..n] == PLAINTEXT {
                 uart::puts("OK ("); kernel::mm::print_num(n); uart::puts(" B matched)\n");
@@ -1389,29 +1397,29 @@ fn apple_kernel_self_test() {
     // Test 4: second file (exercises NONCE_COUNTER increment across
     // creates — proves the new IrqGuard + load+store holds more than
     // once, and proves separate file keys via sha256 derivation).
-    uart::puts("[selftest] batfs::create(\"notes.txt\") ... ");
-    match fs::batfs::create("notes.txt", b"M4 boot verified. LL/SC on Device memory bypassed.") {
+    uart::puts("[selftest] sealfs::create(\"notes.txt\") ... ");
+    match fs::sealfs::create("notes.txt", b"M4 boot verified. LL/SC on Device memory bypassed.") {
         Ok(()) => uart::puts("OK\n"),
         Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
     }
 
-    // Test 5: filesystem listing (exercises batfs::list + stats).
-    let (count, cap) = fs::batfs::stats();
-    uart::puts("[selftest] batfs::stats = ");
+    // Test 5: filesystem listing (exercises sealfs::list + stats).
+    let (count, cap) = fs::sealfs::stats();
+    uart::puts("[selftest] sealfs::stats = ");
     kernel::mm::print_num(count);
     uart::puts("/");
     kernel::mm::print_num(cap);
     uart::puts(" files in use\n");
 
     // Test 6: Merkle-tree integrity over the two-file fs.
-    uart::puts("[selftest] batfs::merkle_root = 0x");
-    let root = fs::batfs::merkle_root();
+    uart::puts("[selftest] sealfs::merkle_root = 0x");
+    let root = fs::sealfs::merkle_root();
     for i in 0..8 {
         uart::puthex32(u32::from_be_bytes([root[i*4], root[i*4+1], root[i*4+2], root[i*4+3]]));
     }
     uart::puts("\n");
-    uart::puts("[selftest] batfs::verify_all_integrity ... ");
-    if fs::batfs::verify_all_integrity() {
+    uart::puts("[selftest] sealfs::verify_all_integrity ... ");
+    if fs::sealfs::verify_all_integrity() {
         uart::puts("OK\n");
     } else {
         uart::puts("FAIL\n");
@@ -1630,9 +1638,9 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     } else {
         &passphrase_buf[..passphrase_len]
     };
-    let master_key = derive_batfs_key(passphrase_slice);
-    fs::batfs::init(&master_key);
-    drivers::apple::uart::puts("[boot] BatFS initialized (key=KDF(passphrase))\n");
+    let master_key = derive_sealfs_key(passphrase_slice);
+    fs::sealfs::init(&master_key);
+    drivers::apple::uart::puts("[boot] SealFS initialized (key=KDF(passphrase))\n");
 
     // Initialize display (m1n1 simple framebuffer)
     drivers::apple::uart::puts("[boot] Initializing display...\n");
@@ -1719,7 +1727,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
 
 /// Interactive shell for the M4 path: reads a command line from the
 /// dockchannel UART, dispatches into real kernel ops (memory stats,
-/// BatFS, ...), and prints results back over the same UART.
+/// SealFS, ...), and prints results back over the same UART.
 // /
 /// Note: with m1n1 replaced by our payload, the Mac's USB-CDC
 /// endpoint is gone — so Ubuntu can't read/write this serial until
@@ -1805,13 +1813,13 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  rng            — show RNG / HW entropy availability\n");
             uart::puts("  sha256 <text>  — SHA-256 hash of <text> (hex)\n");
             uart::puts("  bench sha256   — time 64 KiB of software SHA-256\n");
-            uart::puts("  self-test      — frame alloc + BatFS encrypt/verify/Merkle round-trip\n");
+            uart::puts("  self-test      — frame alloc + SealFS encrypt/verify/Merkle round-trip\n");
             uart::puts("  sha-hw         — probe ARMv8.2 SHA-256 crypto extension\n");
             uart::puts("  aes-hw         — probe ARMv8 AES crypto extension\n");
             uart::puts("  screen [N]     — dump FB over vuart at 1/N scale (default 4)\n");
-            uart::puts("  batfs ls       — list BatFS files\n");
-            uart::puts("  batfs create <name> <plaintext>\n");
-            uart::puts("  batfs read <name>\n");
+            uart::puts("  sealfs ls       — list SealFS files\n");
+            uart::puts("  sealfs create <name> <plaintext>\n");
+            uart::puts("  sealfs read <name>\n");
             uart::puts("  halt           — WFE loop\n");
         }
         "uname" => {
@@ -1841,9 +1849,9 @@ fn apple_shell_dispatch(line: &str) {
             }
         }
         "self-test" => {
-            // Runs the frame-allocator / BatFS / Merkle-integrity
+            // Runs the frame-allocator / SealFS / Merkle-integrity
             // chunks of `apple_kernel_self_test`. Fresh-boot only —
-            // re-running fails BatFS create() on "selftest.txt"
+            // re-running fails SealFS create() on "selftest.txt"
             // already existing, which is correct behaviour.
             uart::puts("\n[selftest] starting kernel self-test\n");
             uart::puts("[selftest] frame::alloc_frame ... ");
@@ -1856,14 +1864,14 @@ fn apple_shell_dispatch(line: &str) {
             }
             const SELFT_NAME: &str = "selftest.txt";
             const SELFT_PT: &[u8] = b"Hello from Sphragis on real Apple M4 silicon under HV.";
-            uart::puts("[selftest] batfs::create ... ");
-            match fs::batfs::create(SELFT_NAME, SELFT_PT) {
+            uart::puts("[selftest] sealfs::create ... ");
+            match fs::sealfs::create(SELFT_NAME, SELFT_PT) {
                 Ok(()) => uart::puts("OK\n"),
                 Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
             }
-            uart::puts("[selftest] batfs::read+verify ... ");
+            uart::puts("[selftest] sealfs::read+verify ... ");
             let mut out = [0u8; 128];
-            match fs::batfs::read(SELFT_NAME, &mut out) {
+            match fs::sealfs::read(SELFT_NAME, &mut out) {
                 Ok(n) => {
                     if n == SELFT_PT.len() && &out[..n] == SELFT_PT {
                         uart::puts("OK ("); kernel::mm::print_num(n); uart::puts(" B matched)\n");
@@ -1873,13 +1881,13 @@ fn apple_shell_dispatch(line: &str) {
                 }
                 Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
             }
-            uart::puts("[selftest] batfs::merkle_root = 0x");
-            let root = fs::batfs::merkle_root();
+            uart::puts("[selftest] sealfs::merkle_root = 0x");
+            let root = fs::sealfs::merkle_root();
             for i in 0..8 {
                 uart::puthex32(u32::from_be_bytes([root[i*4], root[i*4+1], root[i*4+2], root[i*4+3]]));
             }
-            uart::puts("\n[selftest] batfs::verify_all_integrity ... ");
-            if fs::batfs::verify_all_integrity() {
+            uart::puts("\n[selftest] sealfs::verify_all_integrity ... ");
+            if fs::sealfs::verify_all_integrity() {
                 uart::puts("OK\n");
             } else {
                 uart::puts("FAIL\n");
@@ -2178,14 +2186,14 @@ fn apple_shell_dispatch(line: &str) {
                 }
             }
         }
-        "batfs" => {
+        "sealfs" => {
             let sub = parts.next().unwrap_or("");
             match sub {
                 "ls" => {
-                    let (count, cap) = fs::batfs::stats();
+                    let (count, cap) = fs::sealfs::stats();
                     uart::puts("  files: "); kernel::mm::print_num(count);
                     uart::puts(" / "); kernel::mm::print_num(cap); uart::puts("\n");
-                    fs::batfs::list(|name, size, enc| {
+                    fs::sealfs::list(|name, size, enc| {
                         uart::puts("  ");
                         uart::puts(name);
                         uart::puts(" (");
@@ -2199,9 +2207,9 @@ fn apple_shell_dispatch(line: &str) {
                     let name = name_body.next().unwrap_or("");
                     let body = name_body.next().unwrap_or("");
                     if name.is_empty() {
-                        uart::puts("  usage: batfs create <name> <plaintext>\n");
+                        uart::puts("  usage: sealfs create <name> <plaintext>\n");
                     } else {
-                        match fs::batfs::create(name, body.as_bytes()) {
+                        match fs::sealfs::create(name, body.as_bytes()) {
                             Ok(()) => uart::puts("  ok\n"),
                             Err(e) => { uart::puts("  error: "); uart::puts(e); uart::puts("\n"); }
                         }
@@ -2210,10 +2218,10 @@ fn apple_shell_dispatch(line: &str) {
                 "read" => {
                     let name = parts.next().unwrap_or("");
                     if name.is_empty() {
-                        uart::puts("  usage: batfs read <name>\n");
+                        uart::puts("  usage: sealfs read <name>\n");
                     } else {
                         let mut out = [0u8; 256];
-                        match fs::batfs::read(name, &mut out) {
+                        match fs::sealfs::read(name, &mut out) {
                             Ok(n) => {
                                 uart::puts("  (");
                                 kernel::mm::print_num(n);
@@ -2227,7 +2235,7 @@ fn apple_shell_dispatch(line: &str) {
                     }
                 }
                 _ => {
-                    uart::puts("  batfs: unknown subcommand — try `help`\n");
+                    uart::puts("  sealfs: unknown subcommand — try `help`\n");
                 }
             }
         }
@@ -2262,10 +2270,10 @@ fn panic(info: &PanicInfo) -> ! {
     let _ = write!(UartWriter, "{}", info.message());
     drivers::uart::puts("\n");
     // V8-ROOT-6: best-effort wipe of sensitive globals before halting.
-    // If we panic while holding auth secrets, TLS keys, or BatFS keys,
+    // If we panic while holding auth secrets, TLS keys, or SealFS keys,
     // an attacker with physical access could cold-boot the DRAM and
     // extract them. wipe::emergency_wipe() zeroes PASSPHRASE_HASH,
-    // DURESS_HASH, per-PCB TLS session keys, and the BatFS key.
+    // DURESS_HASH, per-PCB TLS session keys, and the SealFS key.
     crate::security::wipe::emergency_wipe();
     loop {
         unsafe { core::arch::asm!("wfe") };

@@ -10,7 +10,7 @@ runs `redirect-selftest` at the shell, and asserts:
     "<inner> > <file>" while NOT splitting on a ` > ` inside a
     quoted argument.
   - `execute_with_redirect("whoami", "redirect-probe.txt")` writes
-    captured bytes to BatFS via `ns_create`, and a follow-up
+    captured bytes to SealFS via `ns_create`, and a follow-up
     `ns_read` returns the same content.
 
 This is the load-bearing primitive behind real `|` pipes; pipes

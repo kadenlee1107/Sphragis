@@ -38,7 +38,7 @@ Ported to Rust in:
 
 | Segment | Source | Notes |
 |---------|--------|-------|
-| ENCRYPTED | static green dot | decoration; means "BatFS mounted" |
+| ENCRYPTED | static green dot | decoration; means "SealFS mounted" |
 | NET | `net::ip::our_ip()` / `virtio::net::is_ready()` | "OFFLINE" in red if NIC down |
 | TLS | `net::tls_pinning::current_mode()` | LOCKDOWN cyan / RESEARCH amber / OPEN red |
 | JS | `browser::js::is_enabled()` | ON amber / OFF ink |

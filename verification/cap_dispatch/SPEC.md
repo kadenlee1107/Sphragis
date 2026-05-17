@@ -138,7 +138,7 @@ proof fn cap_dispatch_non_interference(σ: State, ops_a: Seq<Op>, a: CaveId, b: 
 - **MMU bypass.** The proof assumes per-cave page tables hold (the week-11 ASID audit closure verified this hardware-side). If the MMU setup is buggy, all bets are off — that's why the per-cave page table init is the floor, not a target of THIS proof.
 - **Operator misconfiguration.** The proof says "disjoint caps ⟹ no influence". If the operator grants both caves overlapping caps, the property doesn't apply. Operator-side cap grants are logged via SP-AUD-003 categories.
 - **Kernel-side caller deception.** The proof assumes `op.acting_cave` is the TRUE acting cave per the scheduler context — not a value an attacker can spoof from user-mode. The syscall entry stub (`src/kernel/syscall.rs`) is the trusted boundary that establishes `op.acting_cave` from the active scheduler context; that boundary is verified by inspection (it's <50 LOC).
-- **Capability forgery via heap corruption.** If an attacker can corrupt the `Cave.caps` array via a kernel heap overflow, the proof's input invariant no longer holds. Kernel-heap integrity is week-3-4 BatFS-C1 audit closure (IrqGuard around critical sections) + Rust borrow-checker for in-tree code.
+- **Capability forgery via heap corruption.** If an attacker can corrupt the `Cave.caps` array via a kernel heap overflow, the proof's input invariant no longer holds. Kernel-heap integrity is week-3-4 SealFS-C1 audit closure (IrqGuard around critical sections) + Rust borrow-checker for in-tree code.
 
 ## Implementation phasing (SP-VER-001.IMPL)
 

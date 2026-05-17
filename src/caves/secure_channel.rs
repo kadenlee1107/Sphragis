@@ -11,7 +11,7 @@
 //!     receivers catch (a) replay of a prior frame, (b) reorder,
 //!     (c) truncation.
 //!   * Frames are ChaCha20-Poly1305-sealed. Same primitive as
-//!     BatFS (phase 4) and the daemon audit log (phase 3).
+//!     SealFS (phase 4) and the daemon audit log (phase 3).
 //!   * Two independent sequence counters (one per direction) so
 //!     duplex channels don't have to coordinate. Alice seals with
 //!     her outbound counter; Bob opens with his inbound counter

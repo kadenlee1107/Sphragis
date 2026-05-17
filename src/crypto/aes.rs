@@ -37,7 +37,7 @@ static RCON: [u8; 11] = [0x00,0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36]
 /// (browser JS → hardware cntpct_el0 was that channel, post-ATTACK-CT-001).
 // /
 /// The struct keeps the same API surface — `new`, `encrypt_block`,
-/// `ctr_crypt` — so every call site (batfs::create/read, test code)
+/// `ctr_crypt` — so every call site (sealfs::create/read, test code)
 /// continues to compile unchanged.
 pub struct Aes256 {
     inner: aes::Aes256,
@@ -169,7 +169,7 @@ impl Aes128 {
     /// NEW-CRYPTO-001 / DEPRECATED: this is the pure-XOR-stream path with
     /// no tag — callers that want real GCM must use
     /// `crate::crypto::gcm_verified::Aes128Gcm` instead. Kept only for
-    /// non-authenticated keystream use cases (BatFS CTR mode, test code).
+    /// non-authenticated keystream use cases (SealFS CTR mode, test code).
     #[deprecated(note = "Use crypto::gcm_verified::Aes128Gcm for authenticated GCM")]
     pub fn gcm_crypt(&self, nonce: &[u8; 12], data: &mut [u8]) {
         self.ctr_crypt_with_counter(nonce, 2, data);

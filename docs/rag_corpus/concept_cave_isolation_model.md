@@ -14,7 +14,7 @@ Every cave has:
 1. A **PID** — same as any OS.
 2. A **capability set** — what the cave is allowed to do (NET, RAW, DSP, FS, etc.).
 3. A **policy** — what hostnames, ports, and SNI it can reach over the network.
-4. An **origin handle** — the BatFS handle that gates which files it can read or write.
+4. An **origin handle** — the SealFS handle that gates which files it can read or write.
 5. An **audit owner** — every event the cave generates is stamped with its PID; the audit ring records who did what.
 
 A cave with no policy entry cannot reach the network at all. A cave with no FS capability cannot open a file. The default for everything is *deny*.
@@ -26,7 +26,7 @@ Capabilities are typed permissions, not strings:
 - **NET** — can call `bat_https_open`. Without NET, the syscall returns `-EPERM`.
 - **RAW** — can construct raw IPv4 packets via the Mesh stack (rare).
 - **DSP** — display compositor write. Required for any cave that draws.
-- **FS** — BatFS read/write. Without FS, the cave gets a sealed view (read-only of its own writes only, no shared dir).
+- **FS** — SealFS read/write. Without FS, the cave gets a sealed view (read-only of its own writes only, no shared dir).
 
 These are baked into the cave's handle at creation time. There is no syscall to escalate; a cave cannot ask for more than it was given.
 
@@ -59,7 +59,7 @@ cave-run sandbox/my-app           # creates a cave named my-app with sandbox-pol
 Behind the syscall:
 
 1. Kernel allocates a PID
-2. Kernel reads the named policy (e.g., `sandbox/my-app.toml`) from BatFS
+2. Kernel reads the named policy (e.g., `sandbox/my-app.toml`) from SealFS
 3. Kernel constructs the cave handle: PID + capabilities + policy + audit owner
 4. Kernel hands the cave's binary an entry-point and lets it run
 

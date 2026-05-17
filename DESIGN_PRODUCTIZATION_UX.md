@@ -147,7 +147,7 @@ Powered-on device with Sphragis installer media
         │    - Audit-trail seal: first chain head emitted to UART for operator to capture
         │
         │ 3. Installer writes:
-        │    - Sphragis kernel + initial cave config to BatFS
+        │    - Sphragis kernel + initial cave config to SealFS
         │    - Operator-CA pubkey at /attest/operator-ca.pub
         │    - First-time-init marker (consumed by next-boot kernel to skip setup)
         │
@@ -209,7 +209,7 @@ Each user has:
 - A set of capabilities (which caves they can enter; which TPI roles they hold)
 - A creation audit trail (who created, when)
 
-User-account state stored in BatFS at `/users/<user_id>/` — per-user-encrypted under a key derived from `(operator-CA-attested-master, user_id, user_passphrase)`. Master-CA-attested means the user roster is itself attestable; an attacker can't add ghost users.
+User-account state stored in SealFS at `/users/<user_id>/` — per-user-encrypted under a key derived from `(operator-CA-attested-master, user_id, user_passphrase)`. Master-CA-attested means the user roster is itself attestable; an attacker can't add ghost users.
 
 ### Privilege escalation
 
@@ -227,7 +227,7 @@ A user holds one or more roles. Two-person-integrity ops still require quorum fr
 
 ### Implementation phasing
 
-**SP-UX-004.IMPL.A**: data-model + storage (multi-user `/users/` directory + per-user BatFS encryption).
+**SP-UX-004.IMPL.A**: data-model + storage (multi-user `/users/` directory + per-user SealFS encryption).
 
 **SP-UX-004.IMPL.B**: lock-screen username + passphrase UI (replaces today's single-passphrase prompt).
 

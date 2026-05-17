@@ -9,7 +9,7 @@
 //!   - SOCK_STREAM only (SOCK_DGRAM deferred to a follow-up).
 //!   - Abstract namespace only: names are arbitrary strings up to
 //!     64 bytes, compared byte-for-byte. No filesystem backing —
-//!     filesystem-path sockets need BatFS to expose a SOCKET inode
+//!     filesystem-path sockets need SealFS to expose a SOCKET inode
 //!     type, same as the FIFO deferral on pipes.
 //!   - Single per-listener accept queue (depth 8).
 //!   - Per-socket 4 KiB rx ring (the peer's writes land here).

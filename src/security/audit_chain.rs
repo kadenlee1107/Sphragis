@@ -179,7 +179,7 @@ pub fn chain_head() -> [u8; CHAIN_HASH_LEN] {
 /// On-platform seal record. 32-byte chain head + the absolute
 /// entry count at the moment of the seal. Serialized as a 40-byte
 /// blob (8-byte big-endian count + 32-byte hash) into the
-/// BatFS-backed "audit-chain.seal" file.
+/// SealFS-backed "audit-chain.seal" file.
 ///
 /// Verification: read the seal, walk the live ring from
 /// `(seal.count - resident_count) .. seal.count`, recompute, and
@@ -298,7 +298,7 @@ pub fn verify_seal(seal: &ChainSeal) -> SealVerify {
 }
 
 /// Build a fresh seal capturing the current chain head + entry
-/// count. Caller persists the bytes off-platform (BatFS today;
+/// count. Caller persists the bytes off-platform (SealFS today;
 /// TPM / Apple SE in a future arc).
 pub fn current_seal() -> ChainSeal {
     ChainSeal {

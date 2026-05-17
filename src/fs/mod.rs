@@ -1,2 +1,2 @@
-pub mod batfs;
-pub mod batfs_disk;
+pub mod sealfs;
+pub mod sealfs_disk;

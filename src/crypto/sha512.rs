@@ -10,7 +10,7 @@
 //   * Attestation quote signing can use SHA-512 where the wider hash
 //     is required by an external verifier (some Caliptra / SEP /
 //     TPM endorsement chains prefer SHA-512 over SHA-384).
-//   * BatFS Merkle-tree intermediate nodes can use SHA-512 where the
+//   * SealFS Merkle-tree intermediate nodes can use SHA-512 where the
 //     full 64-byte hash gives a wider security margin per node.
 //   * The boot-time KAT covers both SHA-384 and SHA-512 so a
 //     regression in either is caught at first boot.

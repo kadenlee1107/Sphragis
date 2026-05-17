@@ -48,7 +48,7 @@ const DashboardPane = ({ narrow = false }) => {
               Bare-metal AArch64 microkernel · zero external deps
             </div>
             <div style={{ color: appColors.mid }}>
-              Cave isolation · BatFS encrypted · audit-everything
+              Cave isolation · SealFS encrypted · audit-everything
             </div>
             <div style={{ color: appColors.dim, marginTop: 4 }}>
               Built 20260502.a3f1c · signed
@@ -198,7 +198,7 @@ const SecurityPane = ({ narrow = false }) => {
         </Panel>
 
         {/* INTEGRITY */}
-        <Panel title="INTEGRITY" metric="BatFS · MERKLE">
+        <Panel title="INTEGRITY" metric="SealFS · MERKLE">
           {/* Merkle row */}
           <div style={{
             display: "flex", alignItems: "center", gap: 12,

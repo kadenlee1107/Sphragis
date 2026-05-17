@@ -13,7 +13,7 @@ use crate::ui::widgets::{
     paint_file_preview,
 };
 use crate::ui::wm::WindowRect;
-use crate::fs::batfs;
+use crate::fs::sealfs;
 
 const NAME_MAX: usize = 64;
 
@@ -68,7 +68,7 @@ fn paint_sidebar(rect: WindowRect) {
     let fb = gpu::framebuffer();
     let screen_w = gpu::width();
 
-    let (count, _max) = batfs::ns_stats();
+    let (count, _max) = sealfs::ns_stats();
     let mut hdr_buf = [0u8; 24];
     hdr_buf[..7].copy_from_slice(b"FILES (");
     let digits = u32_dec(count as u32, &mut hdr_buf, 7);
@@ -82,7 +82,7 @@ fn paint_sidebar(rect: WindowRect) {
     let sel = selected_file();
     let mut row_index: usize = 0;
 
-    batfs::ns_list(|name, _size, encrypted| {
+    sealfs::ns_list(|name, _size, encrypted| {
         let row_y = rect.y + 28 + (row_index as u32) * row_h;
         if row_y + row_h > rect.y + rect.h { return; }
 
@@ -107,7 +107,7 @@ fn paint_detail_view(rect: WindowRect) {
     let fb = gpu::framebuffer();
     let screen_w = gpu::width();
 
-    let (count, _max) = batfs::ns_stats();
+    let (count, _max) = sealfs::ns_stats();
     if count == 0 {
         font::draw_str(fb, screen_w, rect.x + 14, rect.y + 14,
                        "No files. Create one via SHELL or EDITOR.", p::MID, p::BG);
@@ -120,7 +120,7 @@ fn paint_detail_view(rect: WindowRect) {
     let mut size: usize = 0;
     let mut encrypted = false;
     let mut row_index: usize = 0;
-    batfs::ns_list(|n, s, e| {
+    sealfs::ns_list(|n, s, e| {
         if row_index == sel {
             let l = n.len().min(NAME_MAX);
             name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -179,7 +179,7 @@ fn paint_delete_modal(idx: usize) {
     let mut name_buf = [0u8; NAME_MAX];
     let mut name_len = 0;
     let mut row_index: usize = 0;
-    batfs::ns_list(|n, _s, _e| {
+    sealfs::ns_list(|n, _s, _e| {
         if row_index == idx {
             let l = n.len().min(NAME_MAX);
             name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -199,7 +199,7 @@ fn paint_delete_modal(idx: usize) {
     let modal = ConfirmModal {
         title,
         body_lines: &[
-            "  remove the file from BatFS",
+            "  remove the file from SealFS",
             "  zero its encrypted blocks",
             "  add a tombstone to the audit chain",
             "",
@@ -220,7 +220,7 @@ fn actions_for_file(_encrypted: bool) -> [Action<'static>; 2] {
 fn load_preview(name: &str, _encrypted: bool) {
     let buf_ptr = core::ptr::addr_of_mut!(PREVIEW_BUF) as *mut u8;
     let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, 8192) };
-    let len = batfs::ns_read(name, buf).unwrap_or(0);
+    let len = sealfs::ns_read(name, buf).unwrap_or(0);
     unsafe {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PREVIEW_LEN), len);
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PREVIEW_VALID_FOR), selected_file());
@@ -235,7 +235,7 @@ pub fn handle_key(c: u8) -> AppEvent {
 }
 
 fn handle_key_viewing(c: u8) -> AppEvent {
-    let (count, _max) = batfs::ns_stats();
+    let (count, _max) = sealfs::ns_stats();
     match c {
         0x90 => {
             let v = viewport_start();
@@ -272,14 +272,14 @@ fn handle_key_viewing(c: u8) -> AppEvent {
 }
 
 fn open_selected_in_editor() -> AppEvent {
-    let (count, _) = batfs::ns_stats();
+    let (count, _) = sealfs::ns_stats();
     if count == 0 { return AppEvent::Consumed; }
 
     let mut name_buf = [0u8; NAME_MAX];
     let mut name_len = 0;
     let sel = selected_file();
     let mut row_index: usize = 0;
-    batfs::ns_list(|n, _, _| {
+    sealfs::ns_list(|n, _, _| {
         if row_index == sel {
             let l = n.len().min(NAME_MAX);
             name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -308,7 +308,7 @@ fn handle_key_delete_modal(c: u8, idx: usize) -> AppEvent {
             let mut name_buf = [0u8; NAME_MAX];
             let mut name_len = 0;
             let mut row_index: usize = 0;
-            batfs::ns_list(|n, _s, _e| {
+            sealfs::ns_list(|n, _s, _e| {
                 if row_index == idx {
                     let l = n.len().min(NAME_MAX);
                     name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
@@ -318,7 +318,7 @@ fn handle_key_delete_modal(c: u8, idx: usize) -> AppEvent {
             });
             if name_len > 0 {
                 let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
-                let _ = batfs::ns_delete(name);
+                let _ = sealfs::ns_delete(name);
             }
             set_selected_file(0);
             unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing; }
@@ -352,7 +352,7 @@ fn handle_click_viewing(mx: i32, my: i32, body: WindowRect) -> AppEvent {
         let header_h: u32 = 28;
         if my >= (sidebar.y + header_h) as i32 {
             let row_idx = ((my as u32 - sidebar.y - header_h) / row_h) as usize;
-            let (count, _max) = batfs::ns_stats();
+            let (count, _max) = sealfs::ns_stats();
             if row_idx < count {
                 set_selected_file(row_idx);
                 return AppEvent::Repaint;

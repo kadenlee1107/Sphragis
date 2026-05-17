@@ -51,7 +51,7 @@ const DAEMON_PORT: u16 = 9999;
 /// `DEFAULT_TOKEN` in scripts/batcaved.py.
 ///
 /// SECURITY — interim. Production should derive this from the
-/// passphrase-KDF (same path as BatFS), which couples daemon auth to
+/// passphrase-KDF (same path as SealFS), which couples daemon auth to
 /// the auth gate.
 const BUILD_TOKEN: Option<&str> = option_env!("BATCAVED_TOKEN");
 const FALLBACK_TOKEN: &str = "SPHRAGIS-DEV-2026";

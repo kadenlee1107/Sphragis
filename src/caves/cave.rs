@@ -552,7 +552,7 @@ pub fn can_transition(from_cave_id: usize, to_cave_id: u16) -> bool {
 //
 // SELinux distinguishes subject-domains (which we already model as
 // cave IDs) from object-types (file_type_t, socket_type_t, etc.).
-// This module adds the object-type axis: each BatFS file carries
+// This module adds the object-type axis: each SealFS file carries
 // an `obj_type: u8`, and a per-cave rule matrix says which
 // (cave_domain, obj_type, op) tuples are permitted. The default
 // is to permit any access (so existing caves with `obj_type=0`
@@ -683,7 +683,7 @@ pub fn for_each_transition_rule<F: FnMut(u16, u16)>(mut f: F) {
 // ── Exec-time domain auto-transition (gov-grade §3.2 TE slice,
 //    SELinux `domain_auto_trans` equivalent).
 //
-// Each binary (referenced by its BatFS filename) can be tagged with a
+// Each binary (referenced by its SealFS filename) can be tagged with a
 // `target_cave` id. When the operator runs the binary via
 // `exec-file`, the kernel checks whether the active cave is
 // policy-allow-listed to transition to that target via the existing
@@ -693,13 +693,13 @@ pub fn for_each_transition_rule<F: FnMut(u16, u16)>(mut f: F) {
 // `cave::enter` semantics).
 //
 // We keep the table on the side instead of widening `FileEntry`
-// because BatFS persistence layers (`fs::batfs_disk`) are byte-
+// because SealFS persistence layers (`fs::sealfs_disk`) are byte-
 // stable on the existing struct shape; growing the entry would mean
 // a coordinated on-disk format bump. The side-table model is also
 // how SELinux itself models `domain_auto_trans` — the policy lives
 // in the policy database, not on the file.
 //
-// `MAX_FILENAME` matches `fs::batfs::MAX_FILENAME` (96). Keeping our
+// `MAX_FILENAME` matches `fs::sealfs::MAX_FILENAME` (96). Keeping our
 // own constant here so this module stays self-contained.
 const EXEC_TRANS_MAX_NAME: usize = 96;
 const MAX_EXEC_TRANS_RULES: usize = 32;
@@ -819,7 +819,7 @@ pub fn for_each_exec_transition<F: FnMut(&str, u16)>(mut f: F) {
 //
 // Each cave carries a 32-bit taint set — a bitmap of independent
 // taint sources (e.g. bit 0 = PII, bit 1 = compliance-restricted,
-// bit 2 = trade-secret). Files in BatFS carry their own taint set.
+// bit 2 = trade-secret). Files in SealFS carry their own taint set.
 //
 // Propagation rules:
 //   - ns_read:  cave.taint |= file.taint  (reader inherits source's taints)
@@ -877,7 +877,7 @@ pub fn active_taint() -> u32 {
 }
 
 /// OR `bits` into the currently-active cave's taint. Called from
-/// `batfs::ns_read` after a successful read, so the reader's cave
+/// `sealfs::ns_read` after a successful read, so the reader's cave
 /// inherits the file's taints.
 pub fn active_add_taint(bits: u32) {
     let id = get_active();
@@ -1106,9 +1106,9 @@ pub fn active_has_any_fs_cap() -> bool {
 /// Active cave's mount-namespace prefix (gap-audit item 032).
 /// Returns `<cave-name>:` for an active cave, or empty for the
 /// kernel/admin context (no cave attached). Used by
-/// `fs::batfs::ns_*` to scope file names per cave so two caves
+/// `fs::sealfs::ns_*` to scope file names per cave so two caves
 /// can't see each other's filenames even though they share the
-/// same BatFS storage.
+/// same SealFS storage.
 pub fn active_mount_prefix(out: &mut [u8; 80]) -> usize {
     let id = get_active();
     if id == usize::MAX { return 0; }
@@ -1259,7 +1259,7 @@ pub fn get_cave_l1_phys(cave_id: u16) -> Option<usize> {
 /// If the target cave has no built L1 (`get_cave_l1_phys` returns
 /// None) we fall through to running `f` in the caller's context.
 /// The cave_id tag is still applied — any caller that depends on
-/// the `cave_id` for routing (audit ring, BatFS key selection,
+/// the `cave_id` for routing (audit ring, SealFS key selection,
 /// etc.) still sees the right tag, just without MMU enforcement
 /// on this particular run. Same fallback shape as
 /// `sys_wg_service::with_sys_wg_cave` before it was extracted up
@@ -1366,8 +1366,8 @@ pub fn active_has_cap(cap: &str) -> bool {
 pub fn init() {
     INITIALIZED.store(true, Ordering::Relaxed);
 
-    // restore persistent caves from BatFS. Runs AFTER
-    // `fs::batfs::init` (see main.rs ordering) so the filesystem is
+    // restore persistent caves from SealFS. Runs AFTER
+    // `fs::sealfs::init` (see main.rs ordering) so the filesystem is
     // already unlocked with the operator's passphrase. Each cave whose
     // manifest survives the boot is reinstalled into CAVES[] in
     // CaveState::Stopped — the operator brings it back up with
@@ -1482,17 +1482,17 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
         // were trivially recoverable — the constant is in the kernel
         // binary, the name is in `info caves`/audit logs/IPC discovery.
         // Anyone with read access to either could decrypt every cave's
-        // BatFS files.
+        // SealFS files.
         //
-        // Now: HMAC-style derivation against the boot-time BatFS
+        // Now: HMAC-style derivation against the boot-time SealFS
         // master key (which is itself derived from the operator's
-        // passphrase via SHA256 in derive_batfs_key, with per-boot
+        // passphrase via SHA256 in derive_sealfs_key, with per-boot
         // entropy via the salt in main.rs). Knowing the cave name no
         // longer suffices; the attacker also needs the operator
         // passphrase. Defense-in-depth against an attacker with
         // kernel-image read access.
         cave.fs_key = sha256::derive_key(
-            &crate::fs::batfs::master_key(),
+            &crate::fs::sealfs::master_key(),
             name.as_bytes(),
         );
 
@@ -1557,7 +1557,7 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
             );
         }
 
-        // write the cave manifest to BatFS so the registry
+        // write the cave manifest to SealFS so the registry
         // entry survives reboot. No-op for Ephemeral caves. Native /
         // Docker caves both go through this — `create_docker` re-saves
         // afterwards with the upgraded backing+image fields.
@@ -1910,7 +1910,7 @@ pub fn find_id(name: &str) -> Option<usize> {
 // /
 /// 1. cave_type flips to Ephemeral (blocks future "already sealed"
 /// re-seals and will get swept by destroy_all like any ephemeral).
-/// 2. fs_key is zeroed RIGHT NOW. Any BatFS blob that survives
+/// 2. fs_key is zeroed RIGHT NOW. Any SealFS blob that survives
 /// on disk becomes undecryptable — even to the operator, even
 /// with the passphrase. One-way ratchet.
 /// 3. For Docker-backed caves: the daemon's encrypted APFS volume
@@ -1944,7 +1944,7 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
         });
     }
 
-    // Zero the BatFS key + flip state. `find_mut` is re-run because
+    // Zero the SealFS key + flip state. `find_mut` is re-run because
     // the daemon call above may have yielded.
     let cave = find_mut(name)?;
     cave.fs_key = [0; 32];
@@ -1962,7 +1962,7 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
     // (and everything before it) survives a panic-induced reboot.
     // Pairs with the persist::delete above — if the attacker triggers
     // a reboot to escape the trail, the trail is already on disk.
-    let _ = crate::security::audit::flush_to_batfs();
+    let _ = crate::security::audit::flush_to_sealfs();
 
     Ok(())
 }
@@ -2104,7 +2104,7 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
 
     // persist the audit ring so the destroy event is
     // durable across reboot. Same anti-coercion reasoning as seal.
-    let _ = crate::security::audit::flush_to_batfs();
+    let _ = crate::security::audit::flush_to_sealfs();
 
     Ok(())
 }
