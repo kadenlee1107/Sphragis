@@ -194,6 +194,18 @@ fn cat_label(cat: u8) -> &'static str {
         11 => "pipe",
         12 => "sock",
         13 => "shm",
+        14 => "crypto",
+        15 => "net",
+        16 => "fs",
+        17 => "keyrot",
+        18 => "tpi",
+        // SP-AUD-003: NIAP FAU_GEN.1 categories
+        19 => "session",
+        20 => "privesc",
+        21 => "loadmod",
+        22 => "update",
+        23 => "filea",
+        24 => "attest",
         _  => "?",
     }
 }

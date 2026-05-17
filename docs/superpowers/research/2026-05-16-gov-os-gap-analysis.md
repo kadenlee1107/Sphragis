@@ -108,7 +108,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 |---|---|---|---|
 | AUD-001 | P0 | ⚠️ PARTIAL | HMAC-SHA-256 chain present (week 3-4); **upgrade to HMAC-SHA-384** per CNSA 2.0 |
 | AUD-002 | P0 | ❌ MISSING | WORM export to BatFS — audit FS-H7 deferred |
-| AUD-003 | P0 | ⚠️ PARTIAL | Week 3-4 added Crypto / Net / Fs / KeyRotate / TpiOp categories; **add Authentication, PrivilegeEscalation, KernelModuleLoad, UpdateApply** to match NIAP FAU_GEN.1 |
+| AUD-003 | P0 | ✅ HAVE | All NIAP FAU_GEN.1 categories present: 19 categories incl. `AuthSession`, `PrivEsc`, `LoadableMod`, `UpdateApply`, `FileAccess`, `Attest` (SP-AUD-003 added 6 to the existing 13). Display labels in `security.rs` extended. Restore-side serializer mapping extended. Use-site instrumentation (which subsystems emit each new category) is SP-AUD-003.1 follow-up. |
 | AUD-004 | P0 | ❌ MISSING | No offline-verifier tool for the HMAC chain |
 | AUD-005 | P1 | ⚠️ PARTIAL | `ui/sigma_bitmap.rs` exists (589 LoC); not formalized as anomaly detector with thresholds |
 | AUD-006 | P0 | ⚠️ PARTIAL | Same primitive as ISO-009; `recent_for_cave` available. Closure to ✅ requires the SP-ISO-009.1 cap-set wiring at the read callers. |
