@@ -45,7 +45,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 |---|---|---|---|
 | STRAT-001 | P0 | ❌ MISSING | Category claim not published anywhere |
 | STRAT-002 | P0 | ❌ MISSING | No 5-differentiator discipline doc/deck |
-| STRAT-003 | P0 | ❌ MISSING | Single build profile today |
+| STRAT-003 | P0 | ⚠️ PARTIAL | `gov-strict` feature flag landed (SP-B1.6) — defines the gov vs community split at the crypto policy layer. UX-side build split (AGENT-stripped binary) is the existing default (SP-A2 dropped AGENT entirely; both profiles share the same TCB). |
 | STRAT-004 | P1 | ❌ MISSING | Anti-features not formally documented (will be after this doc is committed) |
 
 ## §2. License (LIC)
@@ -64,14 +64,14 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | CRY-001 | P0 | ⚠️ PARTIAL | `ml-kem = "0.2"` crate present; **parameter set unconfirmed** — likely ML-KEM-768 default, must verify and switch to ML-KEM-1024 |
 | CRY-002 | P0 | ⚠️ PARTIAL | `ml-dsa = "0.1.0-rc.8"` present; parameter set unconfirmed — must use ML-DSA-87 |
 | CRY-003 | P0 | ⚠️ PARTIAL | LMS landed in `src/crypto/lms.rs` (SP-B1.3) via `hbs-lms` crate; KAT exposed as `lms-kat` shell command (too slow for boot-smoke window). XMSS still missing (SP-B1.4). |
-| CRY-004 | P0 | ⚠️ PARTIAL | AES-256 ubiquitous; no policy gate rejecting AES-128 |
+| CRY-004 | P0 | ⚠️ PARTIAL | AES-256 ubiquitous; policy gate landed in `src/crypto/policy.rs` via `gov-strict` feature flag (SP-B1.6); call-site sweep to route all algo selection through `policy::ensure_permitted` is SP-B1.6.1 follow-up |
 | CRY-005 | P0 | ⚠️ PARTIAL | `sha384.rs` + `sha512.rs` both exist (SP-B1.5); SHA-256 still default in many call sites (gov-build policy enforcement is SP-B1.6) |
 | CRY-006 | P0 | ⚠️ PARTIAL | Week 3-4 Crypto-F7 closed for SHA-256 + AES-GCM + ChaCha20-Poly1305 KATs; **extend to ML-KEM, ML-DSA, SHA-384, SHA-512, LMS/XMSS, HMAC-SHA-384** |
 | CRY-007 | P0 | ❌ MISSING | No documented FIPS-140-3 cryptographic-module boundary |
 | CRY-008 | P1 | ❌ MISSING | No lab engagement yet |
 | CRY-009 | P2 | ❌ MISSING | No hardware-bound key store yet |
 | CRY-010 | P0 | ⚠️ PARTIAL | Constant-time discipline in hot/hotp.rs (week 5); no enforcement / CI assertion |
-| CRY-011 | P1 | ⚠️ PARTIAL | HMAC-DRBG + RNDR; currently **fail-soft** on RNDR absent (audit FS-H3 open) — needs fail-closed |
+| CRY-011 | P1 | ✅ HAVE | Fail-closed variants landed in SP-B1.8 (`fill_bytes_strict`, `require_hw_rng_or_err`, `require_hw_rng_or_halt`); SP-B1.6 wires `require_hw_rng_or_halt` into the gov-strict boot path |
 
 ## §4. Process / Cave Isolation (ISO)
 

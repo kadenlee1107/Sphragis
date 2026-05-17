@@ -6,6 +6,7 @@ pub mod chacha20poly1305;
 pub mod gcm_verified;
 pub mod hotp;
 pub mod lms;
+pub mod policy;
 pub mod pq_cnsa;
 pub mod pq_hybrid;
 pub mod pq_hybrid_sig;
