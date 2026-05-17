@@ -247,6 +247,12 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // call so chain entries are HMAC-protected from the first event.
     security::audit_chain::init_audit_key();
 
+    // SP-AUD-002 (2026-05-16): initialize the WORM segment buffer so
+    // subsequent audit::record calls also persist a copy to BatFS
+    // segments. Must follow init_audit_key (worm uses the same key
+    // for the segment-chain HMAC) and precede any audit::record.
+    security::audit_worm::init();
+
     // SP-C1.2 (2026-05-16): compute the kernel measurement (SHA-384
     // of .text + .rodata via linker symbols). Cached for later
     // attest::quote calls. Order: after audit-key init so any

@@ -104,6 +104,14 @@ fn canonical_bytes(entry: &Entry, out: &mut [u8; CHAIN_HASH_LEN + MSG_LEN]) -> u
     12 + mlen
 }
 
+/// Return a copy of the AUDIT_HMAC_KEY. Intended for in-kernel
+/// modules that need to HMAC audit-derived material (e.g. the WORM
+/// segment-chain in `audit_worm`). The caller MUST zeroize the copy
+/// after use. Not exported beyond the kernel.
+pub(crate) fn audit_hmac_key_copy() -> [u8; CHAIN_HASH_LEN] {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(AUDIT_HMAC_KEY)) }
+}
+
 /// Update the chain hash for an entry at slot `slot` after a record.
 /// Called from `audit::record` after the entry is in place.
 ///

@@ -2,6 +2,7 @@ pub mod attest;
 pub mod audit;
 pub mod audit_chain;
 pub mod audit_forwarder;
+pub mod audit_worm;
 pub mod auth;
 pub mod boot_screen;
 pub mod deadman;

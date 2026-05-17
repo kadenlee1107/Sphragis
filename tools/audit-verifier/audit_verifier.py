@@ -190,6 +190,124 @@ def hmac_chain_verify_binary(records: list[tuple[int, int, int, bytes]], key: by
     return True, errors
 
 
+def parse_worm_segment(buf: bytes) -> tuple[int, int, bytes, bytes, list[str]]:
+    """Parse a WORM segment file (SP-AUD-002).
+
+    Layout: header(32) + records(N * 204) + trailer(88).
+      header  = MAGIC(24) || seq_be8
+      record  = ts_be8 || cat(1) || mlen(1) || cave_id_be2 || msg(192)
+      trailer = SEAL_MAGIC(24) || record_count_be8 || head_hash(48) || prev_head_first8(8)
+
+    Returns (seq, record_count, head_hash, prev_first8, errors).
+    `record_count` is what the trailer claims; caller may cross-check.
+    """
+    errors: list[str] = []
+    HEADER_LEN = 32
+    RECORD_LEN = 204
+    TRAILER_LEN = 88
+    SEGMENT_MAGIC = b"SPHRAGIS_WORM_SEGMENT_V1"
+    SEAL_MAGIC = b"WORM_SEGMENT_SEAL_V1\x00\x00\x00\x00"
+
+    if len(buf) < HEADER_LEN + TRAILER_LEN:
+        errors.append(f"segment too short: {len(buf)} bytes")
+        return (0, 0, b"", b"", errors)
+    if buf[:24] != SEGMENT_MAGIC:
+        errors.append(f"bad segment magic: {buf[:24]!r}")
+        return (0, 0, b"", b"", errors)
+    seq = int.from_bytes(buf[24:32], "big")
+
+    body = buf[HEADER_LEN:len(buf) - TRAILER_LEN]
+    if len(body) % RECORD_LEN != 0:
+        errors.append(f"segment body length {len(body)} not multiple of record size {RECORD_LEN}")
+        return (seq, 0, b"", b"", errors)
+
+    trailer = buf[len(buf) - TRAILER_LEN:]
+    if trailer[:24] != SEAL_MAGIC:
+        errors.append(f"bad seal magic: {trailer[:24]!r}")
+        return (seq, 0, b"", b"", errors)
+    record_count = int.from_bytes(trailer[24:32], "big")
+    head_hash = trailer[32:32 + 48]
+    prev_first8 = trailer[32 + 48:32 + 48 + 8]
+
+    observed = len(body) // RECORD_LEN
+    if observed != record_count:
+        errors.append(f"trailer record_count={record_count} but body has {observed} records")
+
+    return (seq, record_count, head_hash, prev_first8, errors)
+
+
+def verify_worm_dir(worm_dir: str, key: bytes) -> tuple[bool, list[str]]:
+    """Walk a `audit/worm/` directory's segment files in sequence,
+    verify each segment's HMAC trailer, and cross-check against
+    LATEST_SEAL.bin if present.
+
+    Segment HMAC input: seq_be8 || prev_head_hash(48) || body_bytes
+    where prev_head_hash starts as [0u8; 48] for segment 1.
+
+    Returns (ok, errors).
+    """
+    import os
+    errors: list[str] = []
+    segments = sorted(
+        f for f in os.listdir(worm_dir)
+        if f.startswith("segment-") and f.endswith(".bin")
+    )
+    if not segments:
+        errors.append("no segment-*.bin files found")
+        return False, errors
+
+    prev_head = b"\x00" * 48
+    last_seq = None
+    last_head = None
+    for fname in segments:
+        path = os.path.join(worm_dir, fname)
+        with open(path, "rb") as fh:
+            buf = fh.read()
+        seq, rec_count, claimed_head, claimed_prev8, parse_errs = parse_worm_segment(buf)
+        if parse_errs:
+            errors.extend(f"{fname}: {e}" for e in parse_errs)
+            return False, errors
+
+        body = buf[32:len(buf) - 88]
+        mac_input = seq.to_bytes(8, "big") + prev_head + body
+        recomputed = _hmac.new(key, mac_input, hashlib.sha384).digest()
+        if recomputed != claimed_head:
+            errors.append(
+                f"{fname}: head_hash mismatch — trailer says {claimed_head.hex()[:16]}..., "
+                f"recomputed {recomputed.hex()[:16]}..."
+            )
+            return False, errors
+        if claimed_prev8 != prev_head[:8]:
+            errors.append(
+                f"{fname}: trailer prev_first8 {claimed_prev8.hex()} != actual prev[:8] {prev_head[:8].hex()}"
+            )
+            return False, errors
+        prev_head = claimed_head
+        last_seq = seq
+        last_head = claimed_head
+
+    # Cross-check LATEST_SEAL.bin if it exists.
+    import os
+    latest_path = os.path.join(worm_dir, "LATEST_SEAL.bin")
+    if os.path.exists(latest_path):
+        with open(latest_path, "rb") as fh:
+            lbuf = fh.read()
+        LATEST_MAGIC = b"SPHRAGIS_WORM_LATEST_V1\x00"
+        if lbuf[:24] != LATEST_MAGIC:
+            errors.append(f"LATEST_SEAL.bin bad magic: {lbuf[:24]!r}")
+            return False, errors
+        latest_seq = int.from_bytes(lbuf[24:32], "big")
+        latest_hash = lbuf[32:32 + 48]
+        if latest_seq != last_seq:
+            errors.append(f"LATEST_SEAL.bin seq={latest_seq} but last sealed segment is seq={last_seq}")
+            return False, errors
+        if latest_hash != last_head:
+            errors.append("LATEST_SEAL.bin head_hash != last segment head_hash")
+            return False, errors
+
+    return True, errors
+
+
 def parse_seal_hex(seal_hex: str) -> tuple[int, bytes]:
     """Decode a 56-byte seal: 8B BE count || 48B hash (SP-C4.1 upgraded
     from 40 bytes = 8B + 32B SHA-256 hash)."""
@@ -255,9 +373,12 @@ def main(argv: list[str]) -> int:
         description="Sphragis offline audit-log verifier (SP-AUD-004)",
         epilog="See module docstring for binary-format / HMAC-mode details.",
     )
-    p.add_argument("logfile", help="Path to audit log (text format from `audit-flush` OR binary format from `audit-flush-binary` with --binary)")
+    p.add_argument("logfile", nargs="?", default=None,
+                   help="Path to audit log (text format from `audit-flush` OR binary format from `audit-flush-binary` with --binary). Optional when --worm-dir is given.")
     p.add_argument("--binary", action="store_true",
                    help="Treat logfile as binary-format export (SP-AUD-004.1). Enables full HMAC chain recomputation with --key-hex.")
+    p.add_argument("--worm-dir", default=None,
+                   help="Path to a WORM segment directory (SP-AUD-002). Walks segment-*.bin files in sequence, verifies the HMAC chain across segments, and cross-checks LATEST_SEAL.bin. Requires --key-hex.")
     p.add_argument("--summary", action="store_true",
                    help="Print per-category counts + monotonicity check")
     p.add_argument("--key-hex", default=None,
@@ -274,6 +395,37 @@ def main(argv: list[str]) -> int:
 
     if args.seal_hex and not args.key_hex:
         print("--seal-hex requires --key-hex", file=sys.stderr)
+        return 2
+
+    # SP-AUD-002 WORM directory verification path. Independent of the
+    # logfile/binary text-vs-binary flow; can be combined with a
+    # logfile argument in the same invocation but typically runs alone.
+    if args.worm_dir:
+        if not args.key_hex:
+            print("--worm-dir requires --key-hex (HMAC of AUDIT_HMAC_KEY)", file=sys.stderr)
+            return 2
+        try:
+            key = binascii.unhexlify(args.key_hex)
+        except binascii.Error as e:
+            print(f"[audit-verifier] --key-hex parse error: {e}", file=sys.stderr)
+            return 2
+        if len(key) != 48:
+            print(f"[audit-verifier] WARNING: key is {len(key)} bytes; SP-C4.1 SHA-384 chain expects 48 bytes", file=sys.stderr)
+
+        ok, errs = verify_worm_dir(args.worm_dir, key)
+        if ok:
+            print(f"[audit-verifier] WORM chain VERIFIED for {args.worm_dir}")
+        else:
+            print(f"[audit-verifier] WORM chain FAILED for {args.worm_dir}:")
+            for e in errs:
+                print(f"  {e}")
+            return 1
+        # If no logfile argument also supplied, exit here.
+        if args.logfile is None:
+            return 0
+
+    if args.logfile is None:
+        print("audit_verifier: provide a logfile or --worm-dir", file=sys.stderr)
         return 2
 
     # Read input.
