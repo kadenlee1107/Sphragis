@@ -48,6 +48,18 @@ pq-interop-test = []
 # pq-interop-test feature already covers). See DESIGN_HTTPS_SYSCALL.md.
 https-smoke-test = []
 
+# SP-B1.6 (2026-05-16): sphragis-gov strict crypto build profile.
+# Enables CNSA-2.0-only enforcement at the policy layer:
+#   - Rejects AES-128 (gov: AES-256 only)
+#   - Rejects SHA-1 and SHA-256-for-signing (gov: SHA-384/SHA-512 only)
+#   - Rejects RSA and ECDSA at the policy gate (gov: ML-DSA-87 only)
+#   - Rejects plain ChaCha20-Poly1305 outside CNSA-grade contexts
+#   - Wires rng::require_hw_rng_or_halt() into early boot — kernel
+#     refuses to enter user-space on a platform without ARMv8.5 FEAT_RNG
+# Build with: cargo build --release --target aarch64-unknown-none --features gov-strict
+# See ANTI_FEATURES.md §ANTI-005, REQ-CRY-004 / REQ-CRY-011 / STRAT-003.
+gov-strict = []
+
 [dependencies]
 # ROOT-4 crypto replacement — RustCrypto audited primitives.
 # All no_std-compatible, no heap needed with default-features=false.

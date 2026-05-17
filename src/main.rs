@@ -225,6 +225,14 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // V4: probe ARMv8.5 RNDR hardware RNG and wire it into crypto::rng.
     crypto::rng::probe_hw_rng();
 
+    // SP-B1.6 (2026-05-16): gov-strict boot policy enforcement. No-op
+    // in the community build; under `--features gov-strict` halts the
+    // kernel via WFE-loop if the platform lacks ARMv8.5 FEAT_RNG.
+    // MUST run after probe_hw_rng (which sets HAVE_RNDR) and BEFORE
+    // any operation that consumes entropy (stack-canary seed, audit-
+    // chain HMAC key seed, KATs that exercise keygen).
+    crypto::policy::enforce_boot_policy();
+
     // AUDIT-MEM-H2 (2026-05-15): seed __stack_chk_guard from RNDR
     // immediately after the RNG is probed. The compiler emits canary
     // reads on every function with -Z stack-protector=all; until this
