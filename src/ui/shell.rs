@@ -454,6 +454,8 @@ fn execute_inner(cmd: &str) {
         "audit-seal"          => cmd_audit_seal(),
         "audit-seal-verify"   => cmd_audit_seal_verify(),
         "audit-seal-selftest" => cmd_audit_seal_selftest(),
+        "audit-worm-seal"     => cmd_audit_worm_seal(),
+        "audit-worm-status"   => cmd_audit_worm_status(),
         "integ-set"           => cmd_integ_set(parts[1], parts[2]),
         "integ-show"          => cmd_integ_show(),
         "biba-selftest"       => cmd_biba_selftest(),
@@ -8688,6 +8690,43 @@ fn cmd_audit_seal_selftest() {
     }
 
     console::puts("  ✓ audit-seal: full-ring-rewrite attack detected via frozen checkpoint hash\n");
+}
+
+fn cmd_audit_worm_seal() {
+    use crate::security::audit_worm;
+    console::puts("  audit-worm-seal: sealing current segment\n");
+    match audit_worm::worm_seal_current() {
+        Ok(()) => {
+            let (next_seq, _, _) = audit_worm::worm_status();
+            console::puts("  ✓ sealed; next segment seq=");
+            print_num(next_seq as usize);
+            console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
+}
+
+fn cmd_audit_worm_status() {
+    let (seq, recs, prev8) = crate::security::audit_worm::worm_status();
+    console::puts("  audit-worm-status:\n    current_seq = ");
+    print_num(seq as usize);
+    console::puts("\n    records_in_current = ");
+    print_num(recs as usize);
+    console::puts("\n    prev_head_first8 = ");
+    for b in prev8 {
+        let hi = b >> 4;
+        let lo = b & 0x0f;
+        let to_hex = |n: u8| if n < 10 { b'0' + n } else { b'a' + (n - 10) };
+        let mut s = [0u8; 2];
+        s[0] = to_hex(hi);
+        s[1] = to_hex(lo);
+        console::puts(core::str::from_utf8(&s).unwrap_or("??"));
+    }
+    console::puts("\n");
 }
 
 fn print_seal_verdict(v: crate::security::audit_chain::SealVerify) {

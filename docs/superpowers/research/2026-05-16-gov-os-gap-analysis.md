@@ -14,8 +14,8 @@
 
 | Status | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| ✅ HAVE | **27** | 3 | 0 | **30** |
-| ⚠️ PARTIAL | **35** | 6 | 1 | **42** |
+| ✅ HAVE | **28** | 3 | 0 | **31** |
+| ⚠️ PARTIAL | **34** | 6 | 1 | **41** |
 | ❌ MISSING | **13** | 24 | 5 | **42** |
 | **Total** | 75 | 33 | 6 | **114** |
 
@@ -115,7 +115,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | REQ | P | Status | Notes |
 |---|---|---|---|
 | AUD-001 | P0 | ✅ HAVE | HMAC-SHA-384 chain (SP-C4.1, 2026-05-16; in-place swap from SHA-256). 48-byte CHAIN entries + 48-byte AUDIT_HMAC_KEY + 56-byte ChainSeal wire format. CHAIN_HASH_LEN + SEAL_ENCODED_LEN constants exported. Pre-SP-C4.1 on-disk seal files (40 bytes) unverifiable under new schema; operator should re-seal after upgrade. Verified via qemu_audit_chain_selftest.py + qemu_audit_seal_selftest.py both PASS. |
-| AUD-002 | P0 | ⚠️ PARTIAL | `DESIGN_AUDIT_WORM.md` published (SP-AUD-002). Segment-based architecture (256KiB sealed segments + HMAC-SHA-384 chain across segments + LATEST_SEAL.cbor operator-anchor). Per-segment format spec (header + records + trailer-with-hash). API surface (worm_append, worm_seal_current, worm_latest_seal, worm_verify). Threat coverage for 8 attack classes incl. truncation + rewind + power-loss. SP-AUD-002.IMPL adds src/security/audit_worm.rs (~400 LoC). Closes audit FS-H7 finding once IMPL lands. |
+| AUD-002 | P0 | ✅ HAVE | `DESIGN_AUDIT_WORM.md` published (SP-AUD-002) + IMPL landed (SP-AUD-002.IMPL): `src/security/audit_worm.rs` exposes `init`, `worm_append`, `worm_seal_current`, `worm_status` over a 64KiB static segment buffer; HMAC-SHA-384 chain across segments (seq || prev_head || records); segments persist to BatFS at `audit/worm/segment-NNNNNNNNNN.bin`; operator anchor at `audit/worm/LATEST_SEAL.bin`. Wired into `audit::record` so every event also flows to WORM. Boot init in `main.rs` after `init_audit_key`. Shell commands `audit-worm-seal` + `audit-worm-status`. Verifier extended: `tools/audit-verifier/audit_verifier.py --worm-dir DIR --key-hex K` walks segments, recomputes HMAC chain, cross-checks LATEST_SEAL.bin. Round-trip + tamper-detect verified offline. Closes audit FS-H7 finding. Substrate-honesty: BatFS exposes `create()` (no append/fsync) so sealed segments are atomically replaced not append-only on disk; the WORM property holds against attackers who lack the kernel-only HMAC key. |
 | AUD-003 | P0 | ✅ HAVE | All NIAP FAU_GEN.1 categories present: 19 categories incl. `AuthSession`, `PrivEsc`, `LoadableMod`, `UpdateApply`, `FileAccess`, `Attest` (SP-AUD-003 added 6 to the existing 13). Display labels in `security.rs` extended. Restore-side serializer mapping extended. Use-site instrumentation (which subsystems emit each new category) is SP-AUD-003.1 follow-up. |
 | AUD-004 | P0 | ✅ HAVE | `tools/audit-verifier/audit_verifier.py` (SP-AUD-004) — standalone Python offline verifier with **two complete modes** now: (1) **text mode** parses `/audit.log` (audit-flush) — structural + monotonicity + per-category summary; (2) **binary mode** parses `/audit.bin` (audit-flush-binary; SP-AUD-004.1) — full HMAC-SHA-384 chain recomputation when paired with `--key-hex` (48-byte SHA-384 key per SP-C4.1) + optional seal verification via `--seal-hex` (56-byte seal). End-to-end tested with synthetic binary log. Operator-side: `audit-flush-binary` shell command writes `/audit.bin` per `SPHRAGIS_AUDIT_BINARY_V1` format. SP-AUD-004.2 adds the TPI-quorum key-release flow for production-grade key delivery to the verifier. |
 | AUD-005 | P1 | ⚠️ PARTIAL | `ui/sigma_bitmap.rs` exists (589 LoC); not formalized as anomaly detector with thresholds |

@@ -372,6 +372,13 @@ pub fn record(cat: Category, msg: &[u8]) {
         // are not concurrent across CPUs in our cooperative single-
         // CPU model. The `unsafe` here piggybacks on that.
         crate::security::audit_chain::append_chain(slot, &RING[slot], h);
+
+        // SP-AUD-002 (2026-05-16): also append to the WORM segment
+        // for off-platform persistence. Errors are silent here —
+        // the live in-RAM ring + chain remain authoritative for
+        // queries; WORM is the archival/forensic tier. The
+        // `audit-worm-status` shell command surfaces failures.
+        let _ = crate::security::audit_worm::worm_append(&RING[slot]);
     }
 }
 
