@@ -196,31 +196,117 @@ impl CaveIdentity {
     }
 }
 
-/// Local-cave identity stub registry. SP-C1.3 replaces this with the
-/// kernel-side per-cave registry in `caves::cave`. Today: one slot,
-/// set via `set_local_cave_identity`. Quote() reads from this slot.
-static mut LOCAL_CAVE_IDENTITY: Option<CaveIdentity> = None;
+// ── Per-cave identity registry (SP-C1.3) ─────────────────────────
+//
+// Storage shape: one slot per cave (MAX_CAVES = 32). Each slot
+// holds a fixed-size StoredCaveIdentity to keep the registry as a
+// no-heap static. Public API surface continues to use CaveIdentity
+// with its Vec<u8> name; the conversion happens at register-time.
 
-/// Set the (single, stub) local cave identity. Intended for the
-/// caller to invoke once at cave-creation time. SP-C1.3 replaces
-/// this with a per-cave-slot mechanism that doesn't share global
-/// state across caves.
+const STORED_NAME_MAX: usize = 64;
+
+#[derive(Copy, Clone)]
+struct StoredCaveIdentity {
+    present: bool,
+    name_len: u8,                            // 0..=64
+    name: [u8; STORED_NAME_MAX],
+    measurement: [u8; CAVE_MEASUREMENT_LEN],
+}
+
+const EMPTY_STORED: StoredCaveIdentity = StoredCaveIdentity {
+    present: false,
+    name_len: 0,
+    name: [0u8; STORED_NAME_MAX],
+    measurement: [0u8; CAVE_MEASUREMENT_LEN],
+};
+
+/// One slot per cave. Index by cave_id.
+static mut CAVE_REGISTRY: [StoredCaveIdentity; crate::caves::cave::MAX_CAVES] =
+    [EMPTY_STORED; crate::caves::cave::MAX_CAVES];
+
+/// Register an identity for a specific cave. Intended caller:
+/// `caves::cave` at cave-create or cave-enter time. Overwrites any
+/// existing entry (caves can re-register if their measurement changes,
+/// e.g., a config-reload). Returns Err on cave_id out-of-range or
+/// name-too-long.
 ///
-/// SAFETY: caller must ensure single-threaded init. Until SP-C1.3
-/// wires per-cave storage, this stub mirrors the audit_chain pattern:
-/// init-once, never mutate after.
-pub fn set_local_cave_identity(id: CaveIdentity) {
+/// SP-C1.3.1 (future) tightens this so only privileged cave-
+/// management code can call it. Today: trust the caller; the public
+/// surface from EL0 routes through cave-policy gates before reaching
+/// here.
+///
+/// SAFETY: single-writer assumption. Multiple concurrent registers
+/// for the SAME cave_id race; concurrent registers for DIFFERENT
+/// cave_ids are independent. The cave-create path holds the cave
+/// lock so collisions don't happen in practice.
+pub fn register_cave_identity(
+    cave_id: usize,
+    name: &[u8],
+    measurement: [u8; CAVE_MEASUREMENT_LEN],
+) -> Result<(), &'static str> {
+    if cave_id >= crate::caves::cave::MAX_CAVES {
+        return Err("attest: cave_id out of range");
+    }
+    if name.len() > STORED_NAME_MAX {
+        return Err("attest: cave name > 64 bytes");
+    }
+    let mut stored = StoredCaveIdentity {
+        present: true,
+        name_len: name.len() as u8,
+        name: [0u8; STORED_NAME_MAX],
+        measurement,
+    };
+    stored.name[..name.len()].copy_from_slice(name);
     unsafe {
-        let ptr = core::ptr::addr_of_mut!(LOCAL_CAVE_IDENTITY);
-        (*ptr) = Some(id);
+        let ptr = core::ptr::addr_of_mut!(CAVE_REGISTRY);
+        (*ptr)[cave_id] = stored;
+    }
+    Ok(())
+}
+
+/// Clear a cave's identity (cave-teardown hook).
+pub fn unregister_cave_identity(cave_id: usize) {
+    if cave_id >= crate::caves::cave::MAX_CAVES { return; }
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(CAVE_REGISTRY);
+        (*ptr)[cave_id] = EMPTY_STORED;
     }
 }
 
+/// Look up the identity for the currently-active cave. Returns None
+/// if no cave is active OR the active cave has no registered identity.
 fn current_cave_identity() -> Option<CaveIdentity> {
-    unsafe {
-        let ptr = core::ptr::addr_of!(LOCAL_CAVE_IDENTITY);
-        (*ptr).clone()
+    let cave_id = crate::caves::cave::get_active();
+    if cave_id == usize::MAX || cave_id >= crate::caves::cave::MAX_CAVES {
+        return None;
     }
+    unsafe {
+        let ptr = core::ptr::addr_of!(CAVE_REGISTRY);
+        let stored = &(*ptr)[cave_id];
+        if !stored.present { return None; }
+        Some(CaveIdentity {
+            name: stored.name[..stored.name_len as usize].to_vec(),
+            measurement: stored.measurement,
+        })
+    }
+}
+
+/// Test-only: register identity for cave 0 directly. Equivalent to
+/// the old single-slot stub. Kept for `smoke()` and any caller that
+/// wants the SP-C1.1-era behaviour. Real callers use
+/// `register_cave_identity` with the proper cave_id.
+///
+/// SP-C1.3 compat shim — remove when no caller depends on it.
+pub fn set_local_cave_identity(id: CaveIdentity) {
+    // Use cave 0 as the implicit slot. Tolerates name-length up to
+    // STORED_NAME_MAX; truncates silently above that (this is a
+    // back-compat helper, not a load-bearing API).
+    let name = if id.name.len() > STORED_NAME_MAX {
+        &id.name[..STORED_NAME_MAX]
+    } else {
+        &id.name[..]
+    };
+    let _ = register_cave_identity(0, name, id.measurement);
 }
 
 /// Attestation quote — the produced envelope. Signed payload is:
@@ -287,17 +373,33 @@ fn ensure_attest_key() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Public API: produce a signed Quote attesting to:
-///   - The current kernel measurement
-///   - The local cave's identity
-///   - The caller-supplied claims
-///   - A freshness nonce supplied by the verifier
-///
-/// Returns an error if the local cave identity hasn't been set (via
-/// `set_local_cave_identity`) or if signing fails.
-pub fn quote(nonce: &[u8; NONCE_LEN], claims: Claims) -> Result<Quote, &'static str> {
+/// Look up a registered cave identity by ID (None if unregistered or
+/// out of range). Public so callers (test harnesses, the cave-mgmt UI,
+/// the future external verifier) can inspect what's registered.
+pub fn cave_identity(cave_id: usize) -> Option<CaveIdentity> {
+    if cave_id >= crate::caves::cave::MAX_CAVES { return None; }
+    unsafe {
+        let ptr = core::ptr::addr_of!(CAVE_REGISTRY);
+        let stored = &(*ptr)[cave_id];
+        if !stored.present { return None; }
+        Some(CaveIdentity {
+            name: stored.name[..stored.name_len as usize].to_vec(),
+            measurement: stored.measurement,
+        })
+    }
+}
+
+/// Produce a signed Quote naming `cave_id` as the asserting cave.
+/// Used by `quote()` (which calls with `cave::get_active()`) and by
+/// `smoke()` (which calls with a fixed cave_id, since the smoke
+/// harness runs without an active cave context).
+pub fn quote_for_cave(
+    cave_id: usize,
+    nonce: &[u8; NONCE_LEN],
+    claims: Claims,
+) -> Result<Quote, &'static str> {
     ensure_attest_key()?;
-    let cave = current_cave_identity().ok_or("attest: local cave identity not set")?;
+    let cave = cave_identity(cave_id).ok_or("attest: cave identity not registered for cave_id")?;
     let kernel_meas = KernelMeasurement::current();
     let payload = signed_payload(&kernel_meas, &cave, nonce, &claims);
 
@@ -317,6 +419,22 @@ pub fn quote(nonce: &[u8; NONCE_LEN], claims: Claims) -> Result<Quote, &'static 
         signature: sig,
         verifying_key: vk,
     })
+}
+
+/// Public API: produce a signed Quote attesting to:
+///   - The current kernel measurement
+///   - The currently-active cave's identity (per `cave::get_active`)
+///   - The caller-supplied claims
+///   - A freshness nonce supplied by the verifier
+///
+/// Returns an error if no cave is active OR the active cave has no
+/// registered identity OR signing fails.
+pub fn quote(nonce: &[u8; NONCE_LEN], claims: Claims) -> Result<Quote, &'static str> {
+    let cave_id = crate::caves::cave::get_active();
+    if cave_id == usize::MAX {
+        return Err("attest: no active cave (call quote_for_cave with explicit cave_id instead)");
+    }
+    quote_for_cave(cave_id, nonce, claims)
 }
 
 /// Verify a Quote produced by `quote()` above. Returns Ok iff the
@@ -348,16 +466,18 @@ pub fn verify_quote_local(q: &Quote) -> Result<(), &'static str> {
 // command testing instead (SP-C1.8 follow-up could add a dedicated
 // `attest-smoke` shell command).
 
-/// Round-trip self-test: register a fake cave identity, produce a
-/// quote, verify it locally, tamper-check. Useful for SP-C1.x
-/// regression checking, not wired into boot KAT.
+/// Round-trip self-test: register a fake cave identity for cave 0,
+/// produce a quote naming cave 0 explicitly (since smoke runs without
+/// an active cave context), verify it locally, tamper-check. Useful
+/// for SP-C1.x regression checking, not wired into boot KAT (ML-DSA-87
+/// keygen too slow under QEMU emulation).
 pub fn smoke() -> Result<(), &'static str> {
     let fake_meas = [0xa5u8; CAVE_MEASUREMENT_LEN];
-    set_local_cave_identity(CaveIdentity::new(b"test-cave", fake_meas)?);
+    register_cave_identity(0, b"test-cave", fake_meas)?;
 
     let nonce = [0x42u8; NONCE_LEN];
     let claims = Claims::from_bytes(b"smoke-claim:hello")?;
-    let q = quote(&nonce, claims)?;
+    let q = quote_for_cave(0, &nonce, claims)?;
 
     // Positive verify.
     verify_quote_local(&q)?;

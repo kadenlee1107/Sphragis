@@ -95,7 +95,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | ATT-002 | P0 | ❌ MISSING | No Caliptra integration |
 | ATT-003 | P0 | ❌ MISSING | No SEP attestation flow |
 | ATT-004 | P1 | ❌ MISSING | No TPM 2.0 integration |
-| ATT-005 | P0 | ⚠️ PARTIAL | `CaveIdentity` type defined (name + measurement). Stub single-slot registry via `set_local_cave_identity` for SP-C1.1 testing. SP-C1.3 wires per-cave-slot binding into `caves::cave` at create-time. |
+| ATT-005 | P0 | ⚠️ PARTIAL | `CaveIdentity` type + per-cave registry landed (SP-C1.3). `[StoredCaveIdentity; MAX_CAVES]` static array; `register_cave_identity(cave_id, name, meas)` / `unregister_cave_identity` / `cave_identity(cave_id)` API. `quote()` resolves the active cave via `cave::get_active()`; `quote_for_cave(cave_id, ...)` allows explicit-cave attestation. Still TODO: the `caves::cave::create` path needs to call `register_cave_identity` at cave-create time (currently caller-driven). |
 | ATT-006 | P0 | ❌ MISSING | No HSM-backed operator CA pattern |
 | ATT-007 | P1 | ❌ MISSING | No RATS protocol implementation |
 | ATT-008 | P2 | ❌ MISSING | No CVM attestation |
