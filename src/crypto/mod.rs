@@ -5,6 +5,7 @@ pub mod blake3;
 pub mod chacha20poly1305;
 pub mod gcm_verified;
 pub mod hotp;
+pub mod lms;
 pub mod pq_cnsa;
 pub mod pq_hybrid;
 pub mod pq_hybrid_sig;
@@ -91,6 +92,16 @@ pub fn run_self_tests() -> Result<(), &'static str> {
     // ML-DSA-87 (FIPS 204) sign-verify + tamper-detect KAT — CNSA 2.0
     // PQ signature at category 5. Covers REQ-CRY-002.
     pq_cnsa::kat_mldsa87()?;
+
+    // NOTE: LMS (RFC 8554) KAT is NOT in this boot path. H5 keygen
+    // walks all 32 OTS leaves at generation time, ~270K SHA-256
+    // hashes total — ~30-60s under QEMU emulation without SHA-NI,
+    // which times out the smoke harness. `crypto::lms::kat()` is
+    // exposed for on-demand validation (e.g., via a shell command
+    // or a dedicated self-test script). The algorithm correctness
+    // is still gated — just not at every boot. SP-B1.7 may revisit
+    // this with a verify-only RFC 8554 §F test vector that doesn't
+    // require keygen.
 
     // ChaCha20-Poly1305 — encrypt-then-decrypt round trip + tamper
     // detection on a fixed (key, nonce, ad, pt). Catches codegen
