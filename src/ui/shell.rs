@@ -404,6 +404,7 @@ fn execute_inner(cmd: &str) {
         // "ai" command removed 2026-05-16 per SP-A2 (AGENT app dropped;
         // anti-feature ANTI-002).
         "lms-kat" => cmd_lms_kat(),
+        "attest-smoke" => cmd_attest_smoke(),
         "tcp-selftest" => cmd_tcp_selftest(),
         "tcp-listen" => cmd_tcp_listen(parts[1]),
         "tcp-list" => cmd_tcp_list(),
@@ -10879,6 +10880,25 @@ fn cmd_dmesg(arg: &str) {
 
 // cmd_ai removed 2026-05-16 per SP-A2 (drop AGENT app). See ANTI_FEATURES.md
 // §ANTI-002 — AI in the kernel TCB is anti-feature for gov-grade positioning.
+
+/// On-demand attestation round-trip smoke. Registers a fake cave
+/// identity, produces an ML-DSA-87-signed quote over a fixed nonce
+/// + claims, verifies it locally, runs tamper-detection on both
+/// claims and signature. Prints `[attest-smoke] PASS` or
+/// `[attest-smoke] FAIL <reason>`. Exposed as a shell command (not
+/// boot KAT) because ML-DSA-87 keygen takes seconds under QEMU
+/// emulation. SP-C1.1.
+fn cmd_attest_smoke() {
+    console::puts("[attest-smoke] start (ML-DSA-87 keygen — may take a few seconds)\n");
+    match crate::security::attest::smoke() {
+        Ok(()) => console::puts("[attest-smoke] PASS\n"),
+        Err(e) => {
+            console::puts("[attest-smoke] FAIL ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
+}
 
 /// On-demand LMS KAT. Generates a fresh H5 keypair (~30-60s under
 /// QEMU emulation), signs a fixed message, verifies it, then runs
