@@ -62,8 +62,8 @@ Expected output: `verification results:: 1 verified, 0 errors`.
 |---|---|
 | `verification/README.md` | This file — overview + install + how-to-run |
 | `verification/smoke/smoke.rs` | Single `const-true`-style proof that verifies the toolchain works |
-| `verification/cave_dispatch/` | (Future, SP-C2.2) Capability dispatcher non-interference proof |
-| `verification/ipc_flow/` | (Future, SP-C3) IPC information-flow proof |
+| `verification/cap_dispatch/SPEC.md` | Capability dispatcher non-interference Verus proof specification (SP-VER-001 design). The proof itself is SP-VER-001.IMPL (~7 weeks per phasing). |
+| `verification/ipc_flow/SPEC.md` | IPC information-flow non-interference Verus proof specification (SP-VER-002 design). The proof itself is SP-VER-002.IMPL (~8 weeks per phasing). |
 
 ## CI integration (future, SP-C2.2)
 
