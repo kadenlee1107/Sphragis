@@ -1,0 +1,1987 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sphragis — The secure workstation for Apple Silicon</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #fafafa;
+    --ink: #1d1d1f;
+    --muted: #6e6e73;
+    --hairline: #d2d2d7;
+    --hairline-soft: #e8e8ed;
+    --accent: #0066cc;
+    --accent-ink: #0058b0;
+
+    /* boot panel */
+    --term-bg: #0b0d0e;
+    --term-bg-2: #0f1214;
+    --term-line: #1a1f23;
+    --term-fg: #d6e1e6;
+    --term-mute: #6f8088;
+    --term-cyan: #4ddbe3;
+    --term-cyan-dim: #2c8a90;
+    --term-amber: #d4a14a;
+    --term-green: #6fc28a;
+
+    --serif: "Source Serif 4", "Charter", "Iowan Old Style", "Apple Garamond", Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Inter, Arial, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection { background: #cfe1f7; color: var(--ink); }
+
+  a { color: inherit; text-decoration: none; }
+  button { font: inherit; color: inherit; }
+
+  /* ───── layout primitives ───── */
+  .container {
+    width: 100%;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+  .container-narrow {
+    width: 100%;
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+  section { padding: 140px 0; }
+  @media (max-width: 880px) { section { padding: 88px 0; } .container, .container-narrow { padding: 0 22px; } }
+
+  hr.rule {
+    border: 0;
+    border-top: 1px solid var(--hairline);
+    margin: 0;
+  }
+
+  /* ───── type ───── */
+  h1, h2, h3, h4 {
+    font-family: var(--serif);
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -0.012em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h1 {
+    font-size: clamp(40px, 6.4vw, 76px);
+    line-height: 1.04;
+    letter-spacing: -0.022em;
+    font-weight: 600;
+  }
+  h2 {
+    font-size: clamp(30px, 3.6vw, 44px);
+    line-height: 1.12;
+    letter-spacing: -0.018em;
+  }
+  h3 {
+    font-size: 22px;
+    line-height: 1.25;
+  }
+  p { margin: 0; text-wrap: pretty; }
+  .lede {
+    font-family: var(--sans);
+    font-size: clamp(17px, 1.5vw, 20px);
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 60ch;
+  }
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .mono { font-family: var(--mono); font-feature-settings: "ss01", "cv02"; }
+  .small { font-size: 13px; color: var(--muted); }
+
+  /* ───── nav ───── */
+  .nav {
+    border-bottom: 1px solid var(--hairline-soft);
+    background: var(--bg);
+  }
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+  }
+  .wordmark {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    color: var(--ink);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+  /* Logo glyph: Greek capital sigma (Σ) inside a thin circle —
+     "seal-stamp" reference to σφραγίς (sphragís, "the seal").
+     Inherits color from the wordmark text via currentColor. */
+  .wordmark-glyph {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: var(--ink);
+    transition: color 0.15s ease;
+  }
+  .wordmark:hover .wordmark-glyph { color: var(--accent); }
+  .nav-links {
+    display: flex;
+    gap: 32px;
+    align-items: center;
+  }
+  .nav-links a {
+    font-size: 13.5px;
+    color: var(--muted);
+    transition: color 120ms ease;
+  }
+  .nav-links a:hover { color: var(--ink); }
+
+  /* ───── buttons ───── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px 22px;
+    border-radius: 6px;
+    font-size: 14.5px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--ink);
+    color: #fff;
+    border-color: var(--ink);
+  }
+  .btn-primary:hover { background: #000; }
+  .btn-ghost {
+    background: transparent;
+    color: var(--ink);
+    border-color: var(--hairline);
+  }
+  .btn-ghost:hover { border-color: var(--ink); }
+  .btn-accent {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .btn-accent:hover { background: var(--accent-ink); border-color: var(--accent-ink); }
+  .btn .arrow { transition: transform 160ms ease; }
+  .btn:hover .arrow { transform: translateX(2px); }
+
+  /* ───── hero ───── */
+  .hero { padding-top: 110px; padding-bottom: 120px; text-align: center; }
+  .hero h1 { margin: 0 auto; max-width: 18ch; }
+  .hero .lede {
+    margin: 28px auto 0;
+    text-align: center;
+    max-width: 50ch;
+  }
+  .hero-cta {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    margin-top: 40px;
+    flex-wrap: wrap;
+  }
+  .hero-visual {
+    margin: 84px auto 0;
+    max-width: 980px;
+    border: 1px solid var(--hairline);
+    border-radius: 14px;
+    padding: 28px;
+    background: var(--bg);
+  }
+  @media (max-width: 720px) {
+    .hero-visual { padding: 14px; border-radius: 10px; }
+  }
+
+  /* ───── lock screen (hero visual) ───── */
+  .lock {
+    --lk-bg:        #0A0A0A;
+    --lk-panel:     #0E0E0E;
+    --lk-hairline:  #1A1A1A;
+    --lk-hairline2: #262626;
+    --lk-ink:       #E5E7EB;
+    --lk-mid:       #9CA3AF;
+    --lk-dim:       #4B5563;
+    --lk-faint:     #374151;
+    --lk-cyan:      #22D3EE;
+    --lk-green:     #22C55E;
+    --lk-amber:     #F59E0B;
+
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1280 / 800;
+    background: var(--lk-bg);
+    color: var(--lk-ink);
+    border: 1px solid var(--lk-hairline);
+    border-radius: 10px;
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.4;
+    letter-spacing: 0.04em;
+  }
+  .lock-corner {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    pointer-events: none;
+  }
+  .lock-corner.tl { top: 24px;    left: 24px;  border-top: 1px solid var(--lk-faint); border-left: 1px solid var(--lk-faint); }
+  .lock-corner.tr { top: 24px;    right: 24px; border-top: 1px solid var(--lk-faint); border-right: 1px solid var(--lk-faint); }
+  .lock-corner.bl { bottom: 24px; left: 24px;  border-bottom: 1px solid var(--lk-faint); border-left: 1px solid var(--lk-faint); }
+  .lock-corner.br { bottom: 24px; right: 24px; border-bottom: 1px solid var(--lk-faint); border-right: 1px solid var(--lk-faint); }
+
+  .lock-status {
+    position: absolute;
+    top: 24px; left: 56px; right: 56px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 28px;
+  }
+  .lock-pills { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .lock-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border: 1px solid var(--lk-hairline2);
+    border-radius: 2px;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--lk-mid);
+  }
+  .lock-pill .lab  { color: var(--lk-mid); font-weight: 600; }
+  .lock-pill .val  { color: var(--lk-green); }
+  .lock-pill.amber .val { color: var(--lk-amber); }
+  .lock-pill.cyan  .val { color: var(--lk-cyan); }
+  .lock-pill .dot  { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .9; }
+  .lock-meta { display: flex; gap: 22px; align-items: center; color: var(--lk-dim); font-size: 11px; letter-spacing: 0.1em; }
+  .lock-meta .lab { color: var(--lk-dim); }
+  .lock-meta .val { color: var(--lk-mid); margin-left: 6px; }
+
+  .lock-hairline {
+    position: absolute;
+    left: 0; right: 0;
+    top: 64px;
+    height: 1px;
+    background: var(--lk-hairline);
+  }
+
+  .lock-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0 24px;
+  }
+  .lock-glyph {
+    margin-bottom: 26px;
+    position: relative;
+    width: 96px;
+    height: 58px;
+  }
+  .lock-glyph svg,
+  .lock-glyph canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .lock-glyph.has-3d svg { opacity: 0; }
+  .lock-wordmark {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: 0.25em;
+    color: var(--lk-ink);
+    display: inline-flex;
+    align-items: baseline;
+  }
+  .lock-wordmark .ul {
+    display: inline-block;
+    width: 12px;
+    height: 3px;
+    margin-left: 6px;
+    background: var(--lk-cyan);
+    animation: lk-blink 1.05s steps(2, jump-none) infinite;
+  }
+  .lock-version {
+    margin-top: 14px;
+    color: var(--lk-dim);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+  }
+  .lock-version .sep { color: var(--lk-faint); margin: 0 8px; }
+  .lock-flabel {
+    margin-top: 36px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    color: var(--lk-mid);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: lowercase;
+  }
+  .lock-flabel .tag  { color: var(--lk-cyan); }
+  .lock-flabel .meta { color: var(--lk-dim); font-size: 10px; letter-spacing: 0.1em; }
+  .lock-field {
+    margin-top: 12px;
+    width: min(480px, 92%);
+    height: 56px;
+    border: 1px solid var(--lk-hairline2);
+    background: var(--lk-panel);
+    display: flex;
+    align-items: center;
+    padding: 0 18px;
+    gap: 12px;
+    position: relative;
+  }
+  .lock-field .prefix { color: var(--lk-cyan); font-weight: 700; font-size: 18px; line-height: 1; transform: translateY(-1px); }
+  .lock-field .dots   { display: inline-flex; gap: 8px; }
+  .lock-field .dots span { width: 8px; height: 8px; border-radius: 50%; background: var(--lk-ink); display: inline-block; }
+  .lock-field .cursor { display: inline-block; width: 10px; height: 22px; background: var(--lk-cyan); margin-left: 6px; animation: lk-blink 1.05s steps(2, jump-none) infinite; }
+  .lock-field .attempts { margin-left: auto; color: var(--lk-dim); font-size: 10px; letter-spacing: 0.14em; }
+  .lock-helper {
+    margin-top: 16px;
+    display: flex;
+    gap: 24px;
+    color: var(--lk-dim);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+  }
+
+  /* ── Minimalist Wave-1 lock variant ─────────────────────────────
+     Matches src/security/boot_screen.rs exactly: Σ glyph + 480×56
+     passphrase field, both vertically centered, nothing else.
+     PANEL #18181C + HAIRLINE #2A2A30 + INK #E5E7EB. */
+  .lock-center-min {
+    justify-content: center;
+    gap: 64px;            /* GLYPH_FIELD_GAP in the actual UI */
+  }
+  .lock-field-min {
+    width: min(480px, 92%);
+    height: 56px;
+    border: 1px solid #2A2A30;     /* HAIRLINE */
+    background: #18181C;           /* PANEL */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;                       /* DOT_GAP */
+  }
+  .lock-field-min .dots { display: inline-flex; gap: 8px; }
+  .lock-field-min .dots span {
+    width: 8px; height: 8px;        /* DOT_PX */
+    background: #E5E7EB;           /* INK */
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .lock-bootlog {
+    position: absolute;
+    left: 56px; bottom: 36px;
+    width: 460px;
+    color: var(--lk-dim);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    line-height: 1.7;
+  }
+  .lock-bootlog .ln  { display: grid; grid-template-columns: 70px 1fr; gap: 14px; }
+  .lock-bootlog .tag { color: var(--lk-cyan); }
+  .lock-bootlog .tag.green { color: var(--lk-green); }
+
+  .lock-clock {
+    position: absolute;
+    right: 56px; bottom: 36px;
+    text-align: right;
+    color: var(--lk-dim);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+  }
+  .lock-clock .time {
+    color: var(--lk-ink);
+    font-size: 18px;
+    letter-spacing: 0.10em;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  @keyframes lk-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+  @media (max-width: 880px) {
+    .lock { font-size: 10px; }
+    .lock-status { left: 22px; right: 22px; }
+    .lock-meta { display: none; }
+    .lock-pills { gap: 8px; }
+    .lock-pill { padding: 3px 8px; font-size: 10px; }
+    .lock-bootlog { display: none; }
+    .lock-clock   { display: none; }
+    .lock-corner.tl, .lock-corner.tr { top: 12px; }
+    .lock-corner.bl, .lock-corner.br { bottom: 12px; }
+    .lock-corner.tl, .lock-corner.bl { left: 12px; }
+    .lock-corner.tr, .lock-corner.br { right: 12px; }
+    .lock-wordmark { font-size: 22px; letter-spacing: 0.2em; }
+  }
+
+  /* ───── positioning (3 cols) ───── */
+  .pos-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 56px;
+  }
+  @media (max-width: 880px) { .pos-grid { grid-template-columns: 1fr; gap: 40px; } }
+  .pos-col h3 {
+    font-family: var(--serif);
+    font-size: 23px;
+    font-weight: 600;
+    line-height: 1.25;
+    margin-bottom: 14px;
+    text-wrap: balance;
+  }
+  .pos-col p { color: var(--muted); font-size: 15.5px; line-height: 1.6; }
+  .pos-col .ix {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.12em;
+    margin-bottom: 18px;
+    display: block;
+  }
+
+  /* ───── core guarantees (4 cards) ───── */
+  .section-head {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 56px;
+    align-items: end;
+    padding-bottom: 56px;
+    border-bottom: 1px solid var(--hairline);
+    margin-bottom: 0;
+  }
+  @media (max-width: 880px) { .section-head { grid-template-columns: 1fr; gap: 18px; } }
+  .section-head h2 { max-width: 18ch; }
+  .section-head .lede { margin-top: 0; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0;
+  }
+  @media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
+  .card {
+    padding: 48px 56px 48px 0;
+    border-bottom: 1px solid var(--hairline);
+    border-right: 1px solid var(--hairline);
+  }
+  .card:nth-child(2n) { padding-right: 0; padding-left: 56px; border-right: 0; }
+  .card:nth-last-child(-n+2) { border-bottom: 0; }
+  @media (max-width: 720px) {
+    .card, .card:nth-child(2n) { padding: 36px 0; border-right: 0; border-bottom: 1px solid var(--hairline); }
+    .card:last-child { border-bottom: 0; }
+  }
+  .card-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  .card-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+  }
+  .card-rule {
+    flex: 1;
+    height: 1px;
+    background: var(--hairline);
+    min-width: 24px;
+  }
+  .card-eyebrow {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .card h3 {
+    font-family: var(--serif);
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    margin-bottom: 16px;
+    max-width: 18ch;
+  }
+  .card p { color: var(--muted); font-size: 15.5px; line-height: 1.62; max-width: 50ch; }
+
+  /* ───── pq tls section ───── */
+  .pq-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    gap: 80px;
+    align-items: start;
+  }
+  @media (max-width: 980px) { .pq-grid { grid-template-columns: 1fr; gap: 48px; } }
+  .pq-copy h2 { max-width: 14ch; margin-bottom: 24px; }
+  .pq-copy p { color: var(--muted); font-size: 16px; line-height: 1.65; max-width: 52ch; }
+  .pq-copy p + p { margin-top: 20px; }
+
+  /* TLS handshake transcript — DARK like the actual OS shell.
+     Matches src/ui/palette.rs (BG #0D0D10, PANEL #18181C, HAIRLINE
+     #2A2A30, INK #E5E7EB, MID #6B7280). The OS itself prints TLS log
+     lines in pure mono — see the [tls] lines in src/security/
+     boot_screen.rs lock-screen boot log. Marketing mockup matches.
+     All color tags collapse to mono (INK/MID) for OS authenticity. */
+  .transcript {
+    background: #0D0D10;
+    color: #E5E7EB;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    border-radius: 10px;
+    padding: 24px 26px;
+    overflow-x: auto;
+    border: 1px solid #2A2A30;
+  }
+  .transcript .l { display: block; white-space: pre; }
+  .transcript .c { color: #E5E7EB; }       /* [tls] tags — mono INK */
+  .transcript .g { color: #E5E7EB; }       /* ok / PASS / 200 OK — mono */
+  .transcript .a { color: #E5E7EB; }       /* cipher / cert anchor — mono */
+  .transcript .m { color: #6B7280; }       /* comments / dim — MID */
+  .transcript-bar {
+    display: flex;
+    justify-content: space-between;
+    color: #6B7280;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 12px 26px;
+    border-top: 1px solid #2A2A30;
+    margin: 24px -26px -24px;
+  }
+
+  .pq-anchors {
+    margin-top: 28px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .anchor-chip {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    padding: 6px 11px;
+    border-radius: 4px;
+    background: var(--bg-soft);
+  }
+
+  /* ───── what we boot on ───── */
+  .boot-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: 80px;
+  }
+  @media (max-width: 880px) { .boot-grid { grid-template-columns: 1fr; gap: 32px; } }
+  .boot-grid h2 { max-width: 14ch; }
+  .boot-grid .small-id {
+    font-family: var(--mono);
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 16px;
+    letter-spacing: 0.04em;
+  }
+  ul.facts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--hairline);
+  }
+  ul.facts li {
+    padding: 18px 0;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 16px;
+    color: var(--ink);
+    line-height: 1.55;
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  ul.facts li::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-top: 10px;
+  }
+
+  /* ───── proof (m4 hardware photos) ───── */
+  .proof-intro {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 56px;
+    align-items: end;
+    margin-bottom: 44px;
+  }
+  @media (max-width: 880px) {
+    .proof-intro { grid-template-columns: 1fr; gap: 18px; }
+  }
+  .proof-intro h2 { max-width: 16ch; }
+  .proof-intro .lede { margin-top: 0; }
+  /* ───── M4 boot proof carousel ─────────────────────────────────────
+     Pure-CSS click-driven carousel. No JavaScript. Each slide has
+     prev/next anchor links pointing at the adjacent slide's ID;
+     clicking them scrolls the track horizontally via scroll-snap +
+     scroll-behavior: smooth. Slides wrap (1's prev = 5; 5's next = 1).
+     Track auto-snaps to whichever slide the user lands on; scrollbar
+     is hidden because the arrows are the primary control. */
+  .proof-carousel {
+    position: relative;
+  }
+  .proof-track {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 100%;
+    gap: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 10px;
+    border: 1px solid var(--hairline);
+    background: #0a0a0a;
+  }
+  .proof-track::-webkit-scrollbar { display: none; }
+  .proof-fig {
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    background: #0a0a0a;
+    margin: 0;
+    position: relative;       /* so .proof-nav can absolutely position */
+  }
+  .proof-fig img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    aspect-ratio: 4 / 3;
+    object-fit: contain;     /* don't crop — these are evidence photos, every pixel counts */
+  }
+  .proof-cap {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 18px;
+    border-top: 1px solid var(--hairline);
+    background: var(--bg);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .proof-cap .ix    { color: var(--accent); }
+  .proof-cap .what  { color: var(--ink); flex: 1; }
+
+  /* Prev / next arrow buttons. One pair per slide, sitting on top of
+     the image at the left + right edges. Translucent dark pill with
+     a chevron; brightens on hover. The arrow is an anchor link so
+     clicking it scrolls the track to the linked slide via the
+     scroll-snap + scroll-behavior: smooth above. */
+  .proof-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.85);
+    color: #1d1d1f;
+    text-decoration: none;
+    font-size: 20px;
+    line-height: 1;
+    font-weight: 400;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2), 0 2px 8px rgba(0,0,0,0.15);
+    transition: background 0.15s, transform 0.15s;
+    user-select: none;
+    cursor: pointer;
+  }
+  .proof-nav:hover {
+    background: #ffffff;
+    transform: translateY(-50%) scale(1.05);
+  }
+  .proof-nav:active { transform: translateY(-50%) scale(0.98); }
+  .proof-nav.prev { left: 16px; }
+  .proof-nav.next { right: 16px; }
+
+  /* Carousel hint line below the photo. */
+  .proof-hint {
+    margin-top: 12px;
+    text-align: center;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+  }
+  .proof-hint .badge {
+    display: inline-block;
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    padding: 2px 10px;
+    margin: 0 4px;
+    color: var(--ink);
+    background: var(--bg-soft);
+  }
+
+  /* ───── apps showcase ───── */
+  .apps-intro {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 56px;
+    align-items: end;
+    margin-bottom: 44px;
+  }
+  @media (max-width: 880px) { .apps-intro { grid-template-columns: 1fr; gap: 18px; } }
+  .apps-intro h2 { max-width: 18ch; }
+  .apps-intro .lede { margin-top: 0; }
+
+  .apps-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+  @media (max-width: 880px) { .apps-grid { grid-template-columns: 1fr; gap: 18px; } }
+
+  .appcard {
+    margin: 0;
+    /* The .ac inside is DARK (matches the actual Sphragis OS which is
+       a dark-themed OS). .appcard is the device-frame around it:
+       white background carries the figcaption strip below; subtle
+       elevation lifts the whole card off the page. Same pattern Apple
+       uses on apple.com — white site with dark phone screenshots. */
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg);
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.04),
+      0 4px 14px rgba(0, 0, 0, 0.05);
+  }
+  .appcard-cap {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    padding: 14px 18px;
+    border-top: 1px solid var(--hairline);
+    background: var(--bg);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .appcard-cap .ix   { color: var(--accent); }
+  .appcard-cap .name { color: var(--ink); letter-spacing: 0.12em; }
+  .appcard-cap .desc { flex: 1; color: var(--muted); }
+
+  .ac {
+    /* Match Sphragis OS palette EXACTLY (src/ui/palette.rs).
+       The actual OS is pure 6-color mono: BG / PANEL / HAIRLINE /
+       INK / MID / FAINT. Color is used in exactly ONE place in
+       the entire app surface — the version string in dashboard.rs:142
+       (CYAN #22D3EE). Every other app (caves_mgr, comms, editor,
+       filemanager, netmon, security) is zero color usage. These
+       mockups now reflect that truth — pure mono dark with cyan
+       reserved for the version label only. */
+    --ac-bg:    #0D0D10;   /* src/ui/palette.rs BG */
+    --ac-panel: #18181C;   /* src/ui/palette.rs PANEL */
+    --ac-hair:  #2A2A30;   /* src/ui/palette.rs HAIRLINE */
+    --ac-hair2: #2A2A30;   /* same — OS has only one hairline color */
+    --ac-ink:   #E5E7EB;   /* src/ui/palette.rs INK (primary text) */
+    --ac-mid:   #6B7280;   /* src/ui/palette.rs MID (secondary text) */
+    --ac-dim:   #4A4D55;   /* src/ui/palette.rs FAINT */
+    --ac-faint: #4A4D55;   /* src/ui/palette.rs FAINT */
+    /* All color accent slots remapped to mono. The actual OS apps use
+       color in exactly one place (CYAN on the dashboard version
+       string, dashboard.rs:142). For visual coherence with the lock
+       screen — which is pure mono — the marketing mockups go fully
+       mono too. Differentiation comes from typography, position, and
+       MID/FAINT weight instead of color. */
+    --ac-cyan:  #E5E7EB;   /* mono — match lock-screen INK */
+    --ac-green: #E5E7EB;   /* mono */
+    --ac-amber: #E5E7EB;   /* mono */
+    --ac-red:   #E5E7EB;   /* mono */
+
+    background: var(--ac-bg);
+    color: var(--ac-ink);
+    font-family: var(--mono);
+    font-size: 9px;
+    line-height: 1.45;
+    letter-spacing: 0.03em;
+    aspect-ratio: 1280 / 748;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .ac-pad   { padding: 10px; gap: 10px; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .ac-panel {
+    background: var(--ac-panel);
+    border: 1px solid var(--ac-hair);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .ac-panel-h {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--ac-hair);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    color: var(--ac-mid);
+    flex-shrink: 0;
+  }
+  .ac-panel-h .t { color: var(--ac-ink); font-weight: 600; }
+  .ac-panel-h .m { color: var(--ac-faint); font-size: 8px; letter-spacing: 0.12em; }
+  .ac-panel-b { padding: 8px 10px; flex: 1; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow: hidden; }
+
+  .ac-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 0 0 auto; min-height: 0; }
+  .ac-row2 > * { min-width: 0; }
+
+  /* tiles */
+  .ac-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 6px; flex: 1; }
+  .ac-tile  { background: var(--ac-bg); border: 1px solid var(--ac-hair); padding: 6px 8px; display: flex; flex-direction: column; justify-content: space-between; }
+  .ac-tile .l { color: var(--ac-faint); font-size: 8px; letter-spacing: 0.12em; }
+  .ac-tile .v { color: var(--ac-ink); font-size: 14px; font-weight: 700; line-height: 1.05; margin-top: 2px; }
+  .ac-tile .v.ok { color: var(--ac-green); }
+  .ac-tile .u { color: var(--ac-dim); font-size: 8px; margin-top: 2px; }
+
+  /* KV row */
+  .ac-kv  { display: grid; grid-template-columns: 70px 1fr; padding: 2.5px 0; border-bottom: 1px dashed var(--ac-hair); align-items: baseline; }
+  .ac-kv:last-child { border-bottom: 0; }
+  .ac-kv > .l { color: var(--ac-faint); font-size: 8px; letter-spacing: 0.12em; }
+  .ac-kv > .v { color: var(--ac-ink); font-size: 9px; }
+  .ac-kv > .v.cyan  { color: var(--ac-cyan); }
+  .ac-kv > .v.green { color: var(--ac-green); }
+  .ac-kv > .v.amber { color: var(--ac-amber); }
+  .ac-kv > .v.red   { color: var(--ac-red); }
+  .ac-kv > .v.dim   { color: var(--ac-dim); }
+
+  .ac-arch {
+    display: flex; align-items: center; justify-content: space-between;
+    flex: 1; padding: 4px 4px;
+  }
+  .ac-arch .lns { color: var(--ac-mid); font-size: 9px; }
+  .ac-arch .lns .h { color: var(--ac-ink); letter-spacing: 0.08em; }
+  .ac-arch .lns .v { color: var(--ac-cyan); }
+  .ac-arch .lns .f { color: var(--ac-faint); font-size: 8px; }
+
+  /* FS */
+  .ac-fs-strip { display: flex; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--ac-hair); font-size: 9px; color: var(--ac-mid); gap: 6px; flex-shrink: 0; }
+  .ac-fs-strip .lab { color: var(--ac-faint); }
+  .ac-fs-strip .ink { color: var(--ac-ink); letter-spacing: 0.08em; }
+  .ac-fs-strip .cy  { color: var(--ac-cyan); }
+  .ac-fs-strip .right { margin-left: auto; color: var(--ac-dim); }
+  .ac-fs-h    { display: grid; grid-template-columns: 32px 1fr 56px 76px 28px; padding: 4px 12px; color: var(--ac-faint); font-size: 8px; letter-spacing: 0.16em; border-bottom: 1px solid var(--ac-hair); }
+  .ac-fs-row  { display: grid; grid-template-columns: 32px 1fr 56px 76px 28px; padding: 4px 12px; border-bottom: 1px dashed var(--ac-hair); align-items: baseline; font-size: 9px; }
+  .ac-fs-row.sel { background: rgba(229,231,235,0.04); box-shadow: inset 2px 0 0 var(--ac-ink); }
+  .ac-fs-row .e  { color: var(--ac-cyan); font-size: 8px; letter-spacing: 0.1em; }
+  .ac-fs-row .e.raw { color: var(--ac-amber); }
+  .ac-fs-row .n  { color: var(--ac-ink); }
+  .ac-fs-row .s  { color: var(--ac-mid); text-align: right; font-variant-numeric: tabular-nums; }
+  .ac-fs-row .c  { color: var(--ac-cyan); font-size: 8px; }
+  .ac-fs-row .v  { color: var(--ac-green); font-size: 8px; text-align: right; }
+
+  /* ED */
+  .ac-ed-tabs { display: flex; height: 24px; border-bottom: 1px solid var(--ac-hair); flex-shrink: 0; }
+  .ac-ed-tab  { flex: 0 0 130px; padding: 4px 10px; border-right: 1px solid var(--ac-hair); font-size: 9px; color: var(--ac-dim); display: flex; align-items: center; justify-content: space-between; gap: 6px; position: relative; }
+  .ac-ed-tab.active { color: var(--ac-ink); background: var(--ac-bg); }
+  .ac-ed-tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--ac-cyan); }
+  .ac-ed-tab .x  { color: var(--ac-faint); }
+  .ac-ed-tab .d  { color: var(--ac-amber); margin-left: 4px; }
+  .ac-ed-body    { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+  .ac-ed-gutter  { width: 36px; padding: 6px 8px 6px 0; text-align: right; color: var(--ac-faint); font-size: 9px; line-height: 1.55; border-right: 1px solid var(--ac-hair); flex-shrink: 0; }
+  .ac-ed-gutter .cur { color: var(--ac-ink); }
+  .ac-ed-code    { flex: 1; padding: 6px 12px; font-size: 9.5px; line-height: 1.55; overflow: hidden; }
+  .ac-ed-code .ln { display: block; }
+  .ac-ed-code .ln.cur { box-shadow: inset 1px 0 0 var(--ac-cyan); padding-left: 4px; margin-left: -4px; }
+  .ac-ed-code .k { color: var(--ac-cyan); }
+  .ac-ed-code .s { color: var(--ac-green); }
+  .ac-ed-code .c { color: var(--ac-faint); }
+  .ac-ed-code .a { color: var(--ac-amber); }
+  .ac-ed-code .i { color: var(--ac-ink); }
+  .ac-ed-code .p { color: var(--ac-mid); }
+  .ac-ed-stat    { display: flex; gap: 14px; padding: 4px 12px; border-top: 1px solid var(--ac-hair); color: var(--ac-mid); font-size: 8px; letter-spacing: 0.16em; flex-shrink: 0; }
+  .ac-ed-stat .x { color: var(--ac-faint); }
+  .ac-ed-stat .ro { margin-left: auto; color: var(--ac-amber); border: 1px solid currentColor; padding: 1px 5px; letter-spacing: 0.18em; }
+
+  /* CM */
+  .ac-cm-h    { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--ac-hair); flex-shrink: 0; }
+  .ac-cm-h .br { color: var(--ac-ink); font-weight: 700; letter-spacing: 0.22em; font-size: 10px; }
+  .ac-cm-h .right { margin-left: auto; display: inline-flex; gap: 6px; }
+  .ac-cm-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--ac-hair2); font-size: 8px; letter-spacing: 0.1em; color: var(--ac-mid); }
+  .ac-cm-pill.ok   { color: var(--ac-ink); border-color: var(--ac-hair2); }
+  .ac-cm-pill.fail { color: var(--ac-ink); border-color: var(--ac-hair2); }
+  .ac-cm-pill.cy   { color: var(--ac-ink); border-color: var(--ac-hair2); }
+  .ac-cm-pill .v   { color: var(--ac-mid); }
+  .ac-cm-pill .v.ink { color: var(--ac-ink); }
+  .ac-cm-body { flex: 1; padding: 6px 12px; display: flex; flex-direction: column; gap: 2px; justify-content: flex-end; overflow: hidden; min-height: 0; }
+  .ac-cm-msg  { display: grid; grid-template-columns: 30px 12px 30px 1fr; gap: 8px; align-items: baseline; font-size: 9px; }
+  .ac-cm-msg .ts { color: var(--ac-faint); font-size: 8px; }
+  .ac-cm-msg.in  .a { color: var(--ac-green); }
+  .ac-cm-msg.out .a { color: var(--ac-cyan); }
+  .ac-cm-msg .s  { color: var(--ac-mid); font-size: 8px; }
+  .ac-cm-msg .t  { color: var(--ac-ink); }
+  .ac-cm-sys     { color: var(--ac-faint); font-size: 8px; padding: 1px 0; letter-spacing: 0.04em; }
+  .ac-cm-sys .ts { color: var(--ac-faint); margin-right: 8px; }
+  .ac-cm-comp    { display: flex; align-items: center; gap: 6px; padding: 4px 12px; border-top: 1px solid var(--ac-hair); background: var(--ac-panel); flex-shrink: 0; }
+  .ac-cm-comp .gt  { color: var(--ac-cyan); font-weight: 700; }
+  .ac-cm-comp .cur { display: inline-block; width: 6px; height: 10px; background: var(--ac-cyan); animation: lk-blink 1.05s steps(2, jump-none) infinite; }
+  .ac-cm-comp .cnt { margin-left: auto; color: var(--ac-faint); font-size: 8px; letter-spacing: 0.16em; }
+
+  /* ───── specifications table ───── */
+  .specs {
+    border-top: 1px solid var(--hairline);
+  }
+  .spec-row {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 32px;
+    padding: 22px 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+  @media (max-width: 720px) {
+    .spec-row { grid-template-columns: 1fr; gap: 6px; padding: 18px 0; }
+  }
+  .spec-key {
+    font-family: var(--sans);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    font-weight: 500;
+    padding-top: 2px;
+  }
+  .spec-val { font-size: 16px; line-height: 1.55; color: var(--ink); }
+  .spec-val .mono { font-size: 14.5px; }
+
+  /* ───── contact ───── */
+  .contact-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 1fr;
+    gap: 80px;
+    align-items: start;
+  }
+  @media (max-width: 880px) { .contact-grid { grid-template-columns: 1fr; gap: 48px; } }
+
+  .form { display: grid; gap: 18px; }
+  .field { display: grid; gap: 6px; }
+  .field label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .field input, .field textarea {
+    font: inherit;
+    font-size: 15px;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 12px 14px;
+    width: 100%;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+    font-family: var(--sans);
+    resize: vertical;
+  }
+  .field input:focus, .field textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.12);
+  }
+  .field textarea { min-height: 110px; line-height: 1.5; }
+  .field.error input, .field.error textarea { border-color: #c0392b; }
+  .field .err { color: #c0392b; font-size: 12px; }
+
+  .form-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 8px;
+  }
+  .form-meta .small { color: var(--muted); }
+
+  .contact-aside { padding-top: 4px; }
+  .contact-aside h3 {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 14px;
+  }
+  .contact-aside p { color: var(--muted); font-size: 15px; line-height: 1.6; }
+  .contact-aside .email-card {
+    margin-top: 22px;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 22px 24px;
+  }
+  .contact-aside .email-card .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .contact-aside .email-card a {
+    font-family: var(--mono);
+    font-size: 16px;
+    color: var(--ink);
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 1px;
+  }
+  .contact-aside .email-card a:hover { border-color: var(--accent); color: var(--accent); }
+
+  .submitted {
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 28px;
+    background: var(--bg-soft);
+  }
+  .submitted .check {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 1.5px solid var(--accent); color: var(--accent);
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-bottom: 14px;
+    font-size: 14px;
+  }
+
+  /* ───── footer ───── */
+  footer {
+    border-top: 1px solid var(--hairline-soft);
+    padding: 36px 0 56px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .foot-inner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .foot-inner .right { display: flex; gap: 24px; }
+
+  /* ───── section eyebrows ───── */
+  .section-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 22px;
+  }
+  .section-eyebrow .num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+  }
+  .section-eyebrow .lab {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .section-eyebrow .bar {
+    flex: 1;
+    height: 1px;
+    background: var(--hairline);
+  }
+
+  /* anchor offset so headings aren't stuck under the nav (we don't use sticky, but just in case) */
+  [id] { scroll-margin-top: 80px; }
+</style>
+</head>
+
+<body>
+
+<!-- ───── nav ───── -->
+<header class="nav">
+  <div class="container nav-inner">
+    <a href="#top" class="wordmark" aria-label="Sphragis — home">
+      <svg class="wordmark-glyph" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <circle cx="9" cy="9" r="8.1" fill="none" stroke="currentColor" stroke-width="1.1"/>
+        <text x="9" y="12.6" font-family='"Source Serif 4", Charter, Georgia, serif'
+              font-size="11.5" font-weight="600" fill="currentColor"
+              text-anchor="middle" letter-spacing="-0.4">Σ</text>
+      </svg>
+      SPHRAGIS
+    </a>
+    <nav class="nav-links">
+      <a href="#guarantees">Guarantees</a>
+      <a href="#specifications">Specifications</a>
+      <a href="#contact">Contact</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ───── 1. hero ───── -->
+  <section class="hero">
+    <div class="container">
+      <h1>The secure workstation for Apple&nbsp;Silicon.</h1>
+      <p class="lede">
+        Sphragis runs bare-metal on Apple M4. No browser. No telemetry.
+        No third-party kernel. Encrypted filesystem, post-quantum TLS,
+        and per-process network isolation enforced in the kernel.
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#contact">
+          Request evaluation access
+          <span class="arrow" aria-hidden="true">→</span>
+        </a>
+        <a class="btn btn-ghost" href="#specifications">View technical specifications</a>
+      </div>
+
+      <!-- Hero visual: lock screen (matches src/security/boot_screen.rs
+           Wave 1 redesign — deliberately minimalist 5-color pure-mono
+           palette. The actual screen at boot shows only the Σ glyph and
+           the passphrase field; no SPHRAGIS wordmark, no status pills,
+           no boot log, no clock. Marketing mockup matches the real UI. -->
+      <div class="hero-visual" aria-label="Sphragis lock screen">
+        <div class="lock lock-minimal" id="lock-screen">
+          <span class="lock-corner tl" aria-hidden="true"></span>
+          <span class="lock-corner tr" aria-hidden="true"></span>
+          <span class="lock-corner bl" aria-hidden="true"></span>
+          <span class="lock-corner br" aria-hidden="true"></span>
+
+          <div class="lock-center lock-center-min">
+            <div class="lock-glyph" aria-hidden="true">
+              <!-- Σ (Greek sigma) — first letter of σφραγίς (sphragís, "the seal").
+                   Color INK (#E5E7EB) matches src/security/boot_screen.rs::INK. -->
+              <svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+                <text x="48" y="76" font-family='"Source Serif 4", Charter, Georgia, serif'
+                      font-size="96" font-weight="600" fill="#E5E7EB"
+                      text-anchor="middle" letter-spacing="-3">Σ</text>
+              </svg>
+            </div>
+
+            <!-- Passphrase field. PANEL (#18181C) + HAIRLINE (#2A2A30) +
+                 INK (#E5E7EB) dots. Field is 480×56 in actual UI. -->
+            <div class="lock-field-min" aria-label="Passphrase field (idle)">
+              <span class="dots">
+                <span></span><span></span><span></span><span></span><span></span><span></span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- ───── 2. positioning ───── -->
+  <section id="positioning">
+    <div class="container">
+      <div class="section-eyebrow">
+        <span class="num">02</span>
+        <span class="lab">Positioning</span>
+        <span class="bar"></span>
+      </div>
+      <div class="pos-grid">
+        <div class="pos-col">
+          <span class="ix">01 · workstation</span>
+          <h3>A workstation, not a laptop.</h3>
+          <p>
+            Sphragis deliberately omits a web browser. Browsing belongs on a
+            separate device. What remains is the work that needs strong
+            isolation: drafting, review, encrypted storage, signed
+            communications.
+          </p>
+        </div>
+        <div class="pos-col">
+          <span class="ix">02 · platform</span>
+          <h3>Apple Silicon, without Apple's stack.</h3>
+          <p>
+            Sphragis boots on Apple M4 via an independent reverse-engineering
+            pipeline — no Asahi base, no upstream Linux fork. The Asahi
+            installer doesn't yet support M4; we got there our own way.
+          </p>
+        </div>
+        <div class="pos-col">
+          <span class="ix">03 · provenance</span>
+          <h3>Audited from kernel up.</h3>
+          <p>
+            Every cryptographic primitive uses audited RustCrypto
+            implementations. Every panic site has a justification. Every line
+            of source has been linted and clippy-clean. The repository ships
+            with zero warnings.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- ───── 3. core guarantees ───── -->
+  <section id="guarantees">
+    <div class="container">
+      <div class="section-eyebrow">
+        <span class="num">03</span>
+        <span class="lab">Core Guarantees</span>
+        <span class="bar"></span>
+      </div>
+      <div class="section-head">
+        <h2>Four guarantees, enforced in&nbsp;the kernel.</h2>
+        <p class="lede">
+          Each guarantee is a property of the kernel, not a userspace
+          convention. Processes cannot opt out, weaken, or bypass them.
+        </p>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <div class="card-tag">
+            <span class="card-num">01</span>
+            <span class="card-eyebrow">Encrypted filesystem</span>
+            <span class="card-rule"></span>
+          </div>
+          <h3>SealFS encrypts every file before it touches disk.</h3>
+          <p>
+            AES-256-GCM-SIV (misuse-resistant AEAD) on every block. The master key is derived
+            from your passphrase with Argon2id (8 MiB memory, 3 passes) — six
+            orders of magnitude harder to brute-force than legacy SHA-based
+            KDFs. No file ever lives unencrypted on disk.
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-tag">
+            <span class="card-num">02</span>
+            <span class="card-eyebrow">Kernel-mediated HTTPS</span>
+            <span class="card-rule"></span>
+          </div>
+          <h3>Processes never see TLS.</h3>
+          <p>
+            A process opens a host name, gets a plaintext file descriptor, and
+            writes HTTP. The kernel handles the TLS&nbsp;1.3 handshake — including
+            post-quantum hybrid key agreement (X25519 + ML-KEM-768) — and
+            certificate chain validation. No process can ship broken TLS,
+            skip cert validation, or downgrade to HTTP.
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-tag">
+            <span class="card-num">03</span>
+            <span class="card-eyebrow">Per-process network isolation</span>
+            <span class="card-rule"></span>
+          </div>
+          <h3>Default-deny egress, per process.</h3>
+          <p>
+            Every network call is evaluated against a per-process policy:
+            allowed hostnames, allowed ports, allowed SNI. A process with no
+            policy entry cannot reach the network. Every denial is
+            audit-logged.
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-tag">
+            <span class="card-num">04</span>
+            <span class="card-eyebrow">Authentication depth</span>
+            <span class="card-rule"></span>
+          </div>
+          <h3>Passphrase, hardware token, duress, dead-man's switch.</h3>
+          <p>
+            Passphrase plus YubiKey OTP, with a configurable duress code that
+            wipes derived keys on entry, and a dead-man's-switch timer that
+            auto-locks after a configurable interval. No silent recovery
+            paths.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- ───── 4. post-quantum tls ───── -->
+  <section id="post-quantum">
+    <div class="container">
+      <div class="section-eyebrow">
+        <span class="num">04</span>
+        <span class="lab">Post-Quantum TLS</span>
+        <span class="bar"></span>
+      </div>
+
+      <div class="pq-grid">
+        <div class="pq-copy">
+          <h2>Hybrid post-quantum key agreement, in the kernel.</h2>
+          <p>
+            Sphragis implements <span class="mono">draft-ietf-tls-ecdhe-mlkem-04</span>
+            correctly: ML-KEM-768 ciphertext concatenated with X25519
+            ephemeral public key, with the derived shared secret used as raw
+            concatenation per the standard.
+          </p>
+          <p>
+            Verified end-to-end against Cloudflare's public PQ research
+            endpoint. Six trust anchors ship with the OS. No fallback paths.
+            No pin-and-pray.
+          </p>
+
+          <div class="pq-anchors" aria-label="Bundled trust anchors">
+            <span class="anchor-chip">ISRG Root X1</span>
+            <span class="anchor-chip">ISRG Root X2</span>
+            <span class="anchor-chip">Amazon Root CA 1</span>
+            <span class="anchor-chip">DigiCert Global Root CA</span>
+            <span class="anchor-chip">DigiCert Global Root G2</span>
+            <span class="anchor-chip">GTS Root R4</span>
+          </div>
+        </div>
+
+        <div>
+          <div class="transcript" role="img" aria-label="TLS handshake transcript excerpt">
+<span class="l"><span class="m"># tls handshake — pq.cloudflareresearch.com</span></span>
+<span class="l"><span class="c">[tls]</span> ClientHello sent · groups: <span class="a">X25519MLKEM768</span>, X25519</span>
+<span class="l"><span class="c">[tls]</span> ServerHello · selected <span class="a">X25519+ML-KEM-768</span> hybrid</span>
+<span class="l"><span class="c">[tls]</span> ML-KEM-768 decap <span class="g">ok</span> (1088 B ct, 32 B ss)</span>
+<span class="l"><span class="c">[tls]</span> X25519 ECDH <span class="g">ok</span> · shared secret derived</span>
+<span class="l"><span class="c">[tls]</span> EncryptedExtensions parsed</span>
+<span class="l"><span class="c">[tls]</span> Certificate chain (3) · trust anchor: <span class="a">ISRG Root X1</span></span>
+<span class="l"><span class="c">[tls]</span> CertificateVerify <span class="g">ok</span> · ecdsa_secp384r1</span>
+<span class="l"><span class="c">[tls]</span> Finished · session keys installed</span>
+<span class="l"><span class="m">--</span></span>
+<span class="l"><span class="c">[pq-interop]</span> <span class="g">PASS</span> hybrid-pq-handshake-ok</span>
+<span class="l">https://pq.cloudflareresearch.com → <span class="g">200 OK</span></span>
+            <div class="transcript-bar">
+              <span>handshake · pq-interop smoke</span>
+              <span>body 6,264 B</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- ───── 5. what we boot on ───── -->
+  <section id="hardware">
+    <div class="container">
+      <div class="section-eyebrow">
+        <span class="num">05</span>
+        <span class="lab">Hardware</span>
+        <span class="bar"></span>
+      </div>
+      <div class="boot-grid">
+        <div>
+          <h2>Apple M4 Pro, MacBook Pro 14".</h2>
+          <p class="lede" style="margin-top: 18px">
+            Sphragis boots on real M4 silicon. Not a virtual machine. Not an
+            emulator. Native aarch64 from reset vector to login prompt.
+          </p>
+          <div class="small-id mono">Mac16,1 · J604 · T8132 (Donan)</div>
+        </div>
+
+        <ul class="facts">
+          <li>Booted on real M4 hardware (Mac16,1 / J604 / T8132 "Donan").</li>
+          <li>Loads via m1n1 chainload from macOS Recovery; reverts to macOS through the standard boot-picker.</li>
+          <li>Native Apple Silicon: bare aarch64. No virtualization. No emulation.</li>
+          <li>Driver coverage: dockchannel UART, AIC, PMGR, ATC PHY, DCP framebuffer, DWC3 XHCI USB.</li>
+          <li>Asahi Linux explicitly does not support M4. As of 2026, no other non-Apple OS boots on this hardware.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- ───── 6. proof (M4 hardware photos) ───── -->
+  <section id="proof">
+    <div class="container">
+      <div class="section-eyebrow">
+        <span class="num">06</span>
+        <span class="lab">Proof</span>
+        <span class="bar"></span>
+      </div>
+
+      <div class="proof-intro">
+        <h2>Sphragis's first boot on Apple M4 hardware.</h2>
+        <p class="lede">
+          Phone-camera photos of the M4 internal display during the first
+          end-to-end boot of Sphragis on real silicon. 2026-04-17. Power went
+          out before the host could capture frames; these are the durable
+          record of what worked.
+        </p>
+      </div>
+
+      <div class="proof-carousel">
+        <div class="proof-track" aria-label="Five photographs of Sphragis booting on Apple M4 hardware, April 17 2026. Use the arrow buttons on each photo to advance.">
+
+          <figure class="proof-fig" id="proof-1">
+            <a class="proof-nav prev" href="#proof-5" aria-label="Previous photo (wraps to slide 5)">‹</a>
+            <a class="proof-nav next" href="#proof-2" aria-label="Next photo (slide 2 of 5)">›</a>
+            <img src="img/m4-boot/IMG_7118.jpg"
+                 loading="eager"
+                 alt="Sphragis microkernel shell prompt rendered on the M4 internal display, showing the encrypted/offline/firewall status bar." />
+            <figcaption class="proof-cap">
+              <span class="ix">06.1</span>
+              <span class="what">Microkernel shell on M4 — <span class="mono">sphragis&nbsp;&gt;</span> prompt with status bar. <strong>Proof of full boot.</strong></span>
+              <span class="mono">IMG_7118</span>
+            </figcaption>
+          </figure>
+
+          <figure class="proof-fig" id="proof-2">
+            <a class="proof-nav prev" href="#proof-1" aria-label="Previous photo (slide 1 of 5)">‹</a>
+            <a class="proof-nav next" href="#proof-3" aria-label="Next photo (slide 3 of 5)">›</a>
+            <img src="img/m4-boot/IMG_7150.jpg"
+                 loading="lazy"
+                 alt="USB XHCI bring-up output on the M4 display: dwc3, dart, halt, reset, buf, start, portrst all OK." />
+            <figcaption class="proof-cap">
+              <span class="ix">06.2</span>
+              <span class="what">USB XHCI bring-up — <span class="mono">dwc3=OK · dart=OK · halt=OK · reset=OK · buf=OK · start=OK · portrst=OK</span>.</span>
+              <span class="mono">IMG_7150</span>
+            </figcaption>
+          </figure>
+
+          <figure class="proof-fig" id="proof-3">
+            <a class="proof-nav prev" href="#proof-2" aria-label="Previous photo (slide 2 of 5)">‹</a>
+            <a class="proof-nav next" href="#proof-4" aria-label="Next photo (slide 4 of 5)">›</a>
+            <img src="img/m4-boot/IMG_7141.jpg"
+                 loading="lazy"
+                 alt="DWC3 USB controller bring-up output: three DWC3 controllers (drd0/1/3) with SNPSID and HCSPARAMS register dumps." />
+            <figcaption class="proof-cap">
+              <span class="ix">06.3</span>
+              <span class="what">DWC3 USB controller bring-up — three controllers (<span class="mono">drd0/1/3</span>) initialized with SNPSID + HCSPARAMS register dumps.</span>
+              <span class="mono">IMG_7141</span>
+            </figcaption>
+          </figure>
+
+          <figure class="proof-fig" id="proof-4">
+            <a class="proof-nav prev" href="#proof-3" aria-label="Previous photo (slide 3 of 5)">‹</a>
+            <a class="proof-nav next" href="#proof-5" aria-label="Next photo (slide 5 of 5)">›</a>
+            <img src="img/m4-boot/IMG_7184.jpg"
+                 loading="lazy"
+                 alt="PMGR (power manager) clock-gate discovery output: gate IDs per device plus the matched pmgr.devices table — 11 of 12 gates resolved." />
+            <figcaption class="proof-cap">
+              <span class="ix">06.4</span>
+              <span class="what">PMGR clock-gate discovery — gate IDs per device, matched against the <span class="mono">pmgr.devices</span> table (11 / 12 gates resolved).</span>
+              <span class="mono">IMG_7184</span>
+            </figcaption>
+          </figure>
+
+          <figure class="proof-fig" id="proof-5">
+            <a class="proof-nav prev" href="#proof-4" aria-label="Previous photo (slide 4 of 5)">‹</a>
+            <a class="proof-nav next" href="#proof-1" aria-label="Next photo (wraps to slide 1)">›</a>
+            <img src="img/m4-boot/IMG_7195.jpg"
+                 loading="lazy"
+                 alt="ADT (Apple Device Tree) atc-phy3 property dump: every property with hex-dumped value including reg, compatible, and ATC-PHY tunables." />
+            <figcaption class="proof-cap">
+              <span class="ix">06.5</span>
+              <span class="what">ADT <span class="mono">/arm-io/atc-phy3</span> reconnaissance — every property with hex-dumped value (reg, compatible, ACUPHY/USPPLL/USDPHX tunables).</span>
+              <span class="mono">IMG_7195</span>
+            </figcaption>
+          </figure>
+
+        </div>
+        <div class="proof-hint">
+          5 boot-evidence photos <span class="badge">tap ‹ or › on the image to advance</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- ───── 7. apps showcase ───── -->
+  <section id="apps">
+    <div class="container">
+      <div class="section-eyebrow">
+        <span class="num">07</span>
+        <span class="lab">Apps</span>
+        <span class="bar"></span>
+      </div>
+
+      <div class="apps-intro">
+        <h2>Built-in. No third-party dependencies.</h2>
+        <p class="lede">
+          A small set of applications ship with the OS — system overview,
+          encrypted vault, signed editor, end-to-end-encrypted comms. Each is
+          part of the kernel image. No package manager. No app store.
+        </p>
+      </div>
+
+      <div class="apps-grid">
+
+        <!-- DASHBOARD -->
+        <figure class="appcard">
+          <div class="ac" aria-label="Dashboard app screenshot">
+            <div class="ac-pad">
+              <div class="ac-row2" style="height: 58%;">
+                <div class="ac-panel">
+                  <div class="ac-panel-h"><span class="t">SYSTEM</span><span class="m">ARM64 / APPLE-M4</span></div>
+                  <div class="ac-tiles">
+                    <div class="ac-tile"><span class="l">UPTIME</span><span class="v">0d 14m</span><span class="u">since boot</span></div>
+                    <div class="ac-tile"><span class="l">FREE MEM</span><span class="v">31.2</span><span class="u">MiB · 4 GiB</span></div>
+                    <div class="ac-tile"><span class="l">AUDIT</span><span class="v">247</span><span class="u">/ 1024 ring</span></div>
+                    <div class="ac-tile"><span class="l">NETWORK</span><span class="v ok">ONLINE</span><span class="u">10.0.2.15</span></div>
+                  </div>
+                </div>
+                <div class="ac-panel">
+                  <div class="ac-panel-h"><span class="t">SECURITY</span><span class="m">7 SUBSYSTEMS</span></div>
+                  <div class="ac-panel-b">
+                    <div class="ac-kv"><span class="l">ENCRYPT</span><span class="v cyan">AES-256-GCM-SIV</span></div>
+                    <div class="ac-kv"><span class="l">HASH</span><span class="v">SHA-384</span></div>
+                    <div class="ac-kv"><span class="l">KDF</span><span class="v cyan">ARGON2ID · 64MB · t=3</span></div>
+                    <div class="ac-kv"><span class="l">FIREWALL</span><span class="v green">DENY ALL</span></div>
+                    <div class="ac-kv"><span class="l">AUTH</span><span class="v">PASSPHRASE</span></div>
+                    <div class="ac-kv"><span class="l">CAPS</span><span class="v green">ENFORCED</span></div>
+                    <div class="ac-kv"><span class="l">AUDIT</span><span class="v">247 / 1024</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="ac-panel" style="flex: 1; min-height: 0;">
+                <div class="ac-panel-h"><span class="t">ARCHITECTURE</span><span class="m">/etc/release</span></div>
+                <div class="ac-panel-b">
+                  <div class="ac-arch">
+                    <div class="lns">
+                      <div><span class="h">Sphragis</span> <span class="v">v0.1.0-DEV</span></div>
+                      <div>Bare-metal AArch64 microkernel · zero external deps</div>
+                      <div>Cave isolation · SealFS encrypted · audit-everything</div>
+                      <div class="f">compiled with rustc nightly · target aarch64-unknown-none</div>
+                    </div>
+                    <svg width="56" height="34" viewBox="0 0 56 34" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                      <text x="28" y="28" font-family='"Source Serif 4", Charter, Georgia, serif'
+                            font-size="32" font-weight="600" fill="var(--ac-cyan)"
+                            text-anchor="middle">Σ</text>
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <figcaption class="appcard-cap">
+            <span class="ix">07.A</span>
+            <span class="name">DASHBOARD</span>
+            <span class="desc">System overview · live security state · architecture badge</span>
+          </figcaption>
+        </figure>
+
+        <!-- FILES (encrypted vault) -->
+        <figure class="appcard">
+          <div class="ac" aria-label="Files (encrypted vault) app screenshot">
+            <div class="ac-fs-strip">
+              <span class="lab">VAULT</span>
+              <span class="ink">ENCRYPTED</span>
+              <span class="lab">·</span>
+              <span class="cy">AES-256-GCM-SIV</span>
+              <span class="lab">+ MERKLE INTEGRITY</span>
+              <span class="right">6 / MAX_FILES 32</span>
+            </div>
+            <div class="ac-fs-h">
+              <span>ENC</span><span>FILENAME</span><span style="text-align:right">SIZE</span><span>CIPHER</span><span style="text-align:right">OK</span>
+            </div>
+            <div style="flex: 1; overflow: hidden;">
+              <div class="ac-fs-row"><span class="e">[ENC]</span><span class="n">f kernel_main.rs</span><span class="s">12.4 KiB</span><span class="c">AES-GCM-SIV</span><span class="v">OK</span></div>
+              <div class="ac-fs-row sel"><span class="e">[ENC]</span><span class="n">f boot.log</span><span class="s">4 218 B</span><span class="c">AES-GCM-SIV</span><span class="v">OK</span></div>
+              <div class="ac-fs-row"><span class="e">[ENC]</span><span class="n">f audit.ring</span><span class="s">1.0 MiB</span><span class="c">AES-GCM-SIV</span><span class="v">OK</span></div>
+              <div class="ac-fs-row"><span class="e">[ENC]</span><span class="n">f pinset.toml</span><span class="s">812 B</span><span class="c">AES-GCM-SIV</span><span class="v">OK</span></div>
+              <div class="ac-fs-row"><span class="e raw">[RAW]</span><span class="n">f scratch.txt</span><span class="s">208 B</span><span class="c">—</span><span class="v">OK</span></div>
+              <div class="ac-fs-row"><span class="e">[ENC]</span><span class="n">f research-01.cave</span><span class="s">184 KiB</span><span class="c">AES-GCM-SIV</span><span class="v">OK</span></div>
+            </div>
+            <div class="ac-fs-strip" style="border-top: 1px solid var(--ac-hair); border-bottom: 0;">
+              <span class="lab">FILES</span><span class="ink">6</span>
+              <span class="lab">· MERKLE</span><span class="ink">c4e3 d7a2</span><span class="lab">…</span>
+              <span style="color: var(--ac-green);">VERIFIED</span>
+              <span class="right">Ctrl+1 to manage in shell</span>
+            </div>
+          </div>
+          <figcaption class="appcard-cap">
+            <span class="ix">07.B</span>
+            <span class="name">FILES</span>
+            <span class="desc">SealFS encrypted vault · row-level cipher + Merkle verification</span>
+          </figcaption>
+        </figure>
+
+        <!-- EDITOR -->
+        <figure class="appcard">
+          <div class="ac" aria-label="Editor app screenshot">
+            <div class="ac-ed-tabs">
+              <div class="ac-ed-tab active"><span>kernel_main.rs</span><span class="x">×</span></div>
+              <div class="ac-ed-tab"><span>lib.rs</span><span class="x">×</span></div>
+              <div class="ac-ed-tab"><span>Cargo.toml<span class="d">●</span></span><span class="x">×</span></div>
+              <div class="ac-ed-tab" style="flex:0 0 32px; color: var(--ac-faint);">+</div>
+            </div>
+            <div class="ac-ed-body">
+              <div class="ac-ed-gutter">
+                <div>1</div><div>2</div><div>3</div><div>4</div><div>5</div>
+                <div>6</div><div>7</div><div>8</div><div>9</div><div>10</div>
+                <div>11</div><div>12</div><div>13</div><div>14</div><div>15</div>
+                <div>16</div><div class="cur">17</div>
+              </div>
+              <div class="ac-ed-code">
+                <span class="ln"><span class="c">//! Sphragis bare-metal kernel entry</span></span>
+                <span class="ln"><span class="c">//! v0.1.0-DEV · aarch64-unknown-none</span></span>
+                <span class="ln">&nbsp;</span>
+                <span class="ln"><span class="a">#![no_std]</span></span>
+                <span class="ln"><span class="a">#![no_main]</span></span>
+                <span class="ln">&nbsp;</span>
+                <span class="ln"><span class="k">use</span> <span class="i">core</span><span class="p">::</span><span class="i">panic</span><span class="p">::</span><span class="i">PanicInfo</span><span class="p">;</span></span>
+                <span class="ln"><span class="k">use</span> <span class="i">crate</span><span class="p">::</span><span class="i">arch</span><span class="p">::</span><span class="i">aarch64</span><span class="p">::</span><span class="i">cpu</span><span class="p">;</span></span>
+                <span class="ln">&nbsp;</span>
+                <span class="ln"><span class="a">#[no_mangle]</span></span>
+                <span class="ln"><span class="k">pub</span> <span class="k">unsafe</span> <span class="k">extern</span> <span class="s">"C"</span> <span class="k">fn</span> <span class="i">kernel_main_apple</span><span class="p">()</span> <span class="p">-&gt;</span> <span class="p">!</span> <span class="p">{</span></span>
+                <span class="ln">&nbsp;&nbsp;&nbsp;&nbsp;<span class="i">cpu</span><span class="p">::</span><span class="i">init</span><span class="p">();</span></span>
+                <span class="ln">&nbsp;&nbsp;&nbsp;&nbsp;<span class="i">sealfs</span><span class="p">::</span><span class="i">mount</span><span class="p">().</span><span class="i">expect</span><span class="p">(</span><span class="s">"sealfs mount"</span><span class="p">);</span></span>
+                <span class="ln">&nbsp;&nbsp;&nbsp;&nbsp;<span class="i">tls</span><span class="p">::</span><span class="i">load_anchors</span><span class="p">();</span></span>
+                <span class="ln">&nbsp;&nbsp;&nbsp;&nbsp;<span class="i">net</span><span class="p">::</span><span class="i">init</span><span class="p">();</span></span>
+                <span class="ln">&nbsp;&nbsp;&nbsp;&nbsp;<span class="c">// drop into the lock screen</span></span>
+                <span class="ln cur">&nbsp;&nbsp;&nbsp;&nbsp;<span class="i">ui</span><span class="p">::</span><span class="i">lock</span><span class="p">::</span><span class="i">enter</span><span class="p">();</span></span>
+              </div>
+            </div>
+            <div class="ac-ed-stat">
+              <span><span class="x">LANG</span> RUST</span>
+              <span><span class="x">ENC</span> UTF-8</span>
+              <span><span class="x">POS</span> Ln 17, Col 5</span>
+              <span><span class="x">EOL</span> LF UNIX</span>
+              <span class="ro">READ ONLY</span>
+            </div>
+          </div>
+          <figcaption class="appcard-cap">
+            <span class="ix">07.C</span>
+            <span class="name">EDITOR</span>
+            <span class="desc">In-kernel viewer · syntax-aware · signed buffers</span>
+          </figcaption>
+        </figure>
+
+        <!-- COMMS -->
+        <figure class="appcard">
+          <div class="ac" aria-label="Comms (encrypted messaging) app screenshot">
+            <div class="ac-cm-h">
+              <span class="br">COMMS</span>
+              <span class="ac-cm-pill ok"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:currentColor"></span>CONNECTED <span class="v ink">peer 10.0.2.42:9100</span></span>
+              <span class="right">
+                <span class="ac-cm-pill">CHACHA20·POLY1305</span>
+                <span class="ac-cm-pill cy">K <span class="v">c4e3d7a2…</span></span>
+              </span>
+            </div>
+            <div class="ac-cm-body">
+              <div class="ac-cm-sys"><span class="ts">[00:14]</span>connected · key exchange OK · cipher chacha20·poly1305</div>
+              <div class="ac-cm-msg in"><span class="ts">[00:15]</span><span class="a">«</span><span class="s">peer</span><span class="t">up. east-3 link is clean.</span></div>
+              <div class="ac-cm-msg out"><span class="ts">[00:15]</span><span class="a">»</span><span class="s">you</span><span class="t">perimeter clean. dropping into watch mode.</span></div>
+              <div class="ac-cm-msg in"><span class="ts">[00:16]</span><span class="a">«</span><span class="s">peer</span><span class="t">ack. tail -f /var/log/auth on east-3 — shout if anything spikes.</span></div>
+              <div class="ac-cm-msg out"><span class="ts">[00:18]</span><span class="a">»</span><span class="s">you</span><span class="t">watching. ssh from 10.0.2.99 → blocked at fw, src port 41203.</span></div>
+              <div class="ac-cm-msg in"><span class="ts">[00:19]</span><span class="a">«</span><span class="s">peer</span><span class="t">good. their src port pattern is the same as tuesday.</span></div>
+              <div class="ac-cm-msg out"><span class="ts">[00:21]</span><span class="a">»</span><span class="s">you</span><span class="t">same actor then. pinning to the audit ring.</span></div>
+              <div class="ac-cm-sys"><span class="ts">[00:27]</span>key rotation due in 5m</div>
+            </div>
+            <div class="ac-cm-comp">
+              <span class="gt">&gt;</span>
+              <span style="color: var(--ac-ink);">logging that attempt now</span>
+              <span class="cur" aria-hidden="true"></span>
+              <span class="cnt">21 / 80</span>
+            </div>
+          </div>
+          <figcaption class="appcard-cap">
+            <span class="ix">07.D</span>
+            <span class="name">COMMS</span>
+            <span class="desc">End-to-end encrypted peer-to-peer · session-key rotation</span>
+          </figcaption>
+        </figure>
+
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- ───── 8. specifications ───── -->
+  <section id="specifications">
+    <div class="container">
+      <div class="section-eyebrow">
+        <span class="num">08</span>
+        <span class="lab">Specifications</span>
+        <span class="bar"></span>
+      </div>
+
+      <div class="section-head" style="border-bottom: 0; padding-bottom: 32px;">
+        <h2>Specifications.</h2>
+        <p class="lede">
+          A complete picture of the system, kernel to toolchain. Each line is
+          a property of the shipping build, not a roadmap item.
+        </p>
+      </div>
+
+      <div class="specs">
+        <div class="spec-row">
+          <div class="spec-key">Architecture</div>
+          <div class="spec-val">ARM64 / Apple Silicon (M4)</div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-key">Language</div>
+          <div class="spec-val"><span class="mono">Rust</span> · <span class="mono">no_std</span> · edition 2024</div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-key">Source size</div>
+          <div class="spec-val">~199 Rust files · ~96K LoC · no third-party kernel code</div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-key">Crypto stack</div>
+          <div class="spec-val">RustCrypto (audited) — AES-256, ChaCha20-Poly1305, SHA-384, Argon2id, Ed25519, X25519, ML-KEM-1024 (FIPS 203), ML-DSA-87 (FIPS 204), LMS (NIST SP 800-208)</div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-key">TLS</div>
+          <div class="spec-val">TLS 1.3 · hybrid post-quantum · chain-only strict validation</div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-key">Filesystem</div>
+          <div class="spec-val">SealFS · AES-256-GCM-SIV (misuse-resistant AEAD) · Argon2id-derived master key</div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-key">Network</div>
+          <div class="spec-val">Custom IPv4 / TCP / UDP · per-process default-deny egress</div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-key">Authentication</div>
+          <div class="spec-val">Passphrase + YubiKey OTP + duress code + dead-man's switch</div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-key">Toolchain</div>
+          <div class="spec-val">Pinned Rust nightly · 0 warnings · 0 clippy lints</div>
+        </div>
+        <div class="spec-row" style="border-bottom: 0;">
+          <div class="spec-key">License</div>
+          <div class="spec-val">Apache-2.0 (relicensed from AGPL on 2026-05-16; prime-channel friendly)</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <!-- ───── 9. contact ───── -->
+  <section id="contact">
+    <div class="container">
+      <div class="section-eyebrow">
+        <span class="num">09</span>
+        <span class="lab">Contact</span>
+        <span class="bar"></span>
+      </div>
+
+      <div class="section-head" style="border-bottom: 0; padding-bottom: 32px;">
+        <h2>Request evaluation access.</h2>
+        <p class="lede">
+          Evaluation builds are issued individually. Tell us a little about
+          your environment and we will reply with next steps and an SHA-256
+          fingerprint to verify the build against.
+        </p>
+      </div>
+
+      <div class="contact-grid">
+        <div id="contact-form-root"></div>
+
+        <aside class="contact-aside">
+          <h3>Or write directly.</h3>
+          <p>
+            For procurement, audit reports, or technical correspondence with
+            the engineering team. Encrypted mail welcome; PGP key on request.
+          </p>
+          <div class="email-card">
+            <div class="label">Email</div>
+            <a href="mailto:sphragis-os@proton.me" class="mono">sphragis-os@proton.me</a>
+          </div>
+          <div class="email-card">
+            <div class="label">Source &amp; build provenance</div>
+            <a href="#" class="mono">released on request</a>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="container foot-inner">
+    <div>
+      Sphragis is developed by an independent team. We do not solicit investment.
+    </div>
+    <div class="right">
+      <span class="mono">build 0.1.0</span>
+      <span class="mono">© 2026</span>
+    </div>
+  </div>
+</footer>
+
+<!-- ───── Lock-screen project glyph is now a static SVG (Σ wordmark).
+     A three.js rotator previously lived here; removed during the
+     brand cleanup. ───── -->
+
+<!-- ───── React for the contact form ───── -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel">
+  const { useState } = React;
+
+  function ContactForm() {
+    const [vals, setVals] = useState({ name: "", org: "", email: "", useCase: "" });
+    const [errs, setErrs] = useState({});
+    const [submitted, setSubmitted] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
+
+    const onChange = (k) => (e) => {
+      setVals(v => ({ ...v, [k]: e.target.value }));
+      if (errs[k]) setErrs(er => ({ ...er, [k]: undefined }));
+    };
+
+    const validate = () => {
+      const e = {};
+      if (!vals.name.trim()) e.name = "Required.";
+      if (!vals.org.trim()) e.org = "Required.";
+      if (!vals.email.trim()) e.email = "Required.";
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(vals.email)) e.email = "Invalid email.";
+      if (!vals.useCase.trim() || vals.useCase.trim().length < 20) e.useCase = "Tell us at least a sentence (20 chars).";
+      setErrs(e);
+      return Object.keys(e).length === 0;
+    };
+
+    const onSubmit = (ev) => {
+      ev.preventDefault();
+      if (!validate()) return;
+      setSubmitting(true);
+      // simulate submission
+      setTimeout(() => {
+        setSubmitting(false);
+        setSubmitted(true);
+      }, 600);
+    };
+
+    if (submitted) {
+      return (
+        <div className="submitted">
+          <div className="check" aria-hidden="true">✓</div>
+          <h3 style={{fontFamily: "var(--serif)", fontSize: 22, marginBottom: 10}}>
+            Request received.
+          </h3>
+          <p style={{color: "var(--muted)", fontSize: 15, lineHeight: 1.6, maxWidth: "52ch"}}>
+            We will reply from <span className="mono">sphragis-os@proton.me</span> within
+            five business days, with next steps and a SHA-256 fingerprint to
+            verify the evaluation build against.
+          </p>
+          <button
+            className="btn btn-ghost"
+            style={{marginTop: 20}}
+            onClick={() => { setSubmitted(false); setVals({name:"",org:"",email:"",useCase:""}); }}
+          >
+            Submit another
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <form className="form" onSubmit={onSubmit} noValidate>
+        <div className={"field" + (errs.name ? " error" : "")}>
+          <label htmlFor="cf-name">Name</label>
+          <input id="cf-name" type="text" autoComplete="name" value={vals.name} onChange={onChange("name")} />
+          {errs.name && <span className="err">{errs.name}</span>}
+        </div>
+
+        <div className={"field" + (errs.org ? " error" : "")}>
+          <label htmlFor="cf-org">Organization</label>
+          <input id="cf-org" type="text" autoComplete="organization" value={vals.org} onChange={onChange("org")} />
+          {errs.org && <span className="err">{errs.org}</span>}
+        </div>
+
+        <div className={"field" + (errs.email ? " error" : "")}>
+          <label htmlFor="cf-email">Email</label>
+          <input id="cf-email" type="email" autoComplete="email" value={vals.email} onChange={onChange("email")} />
+          {errs.email && <span className="err">{errs.email}</span>}
+        </div>
+
+        <div className={"field" + (errs.useCase ? " error" : "")}>
+          <label htmlFor="cf-use">Intended use</label>
+          <textarea
+            id="cf-use"
+            placeholder="Environment, threat model, and what you would like to evaluate."
+            value={vals.useCase}
+            onChange={onChange("useCase")}
+          />
+          {errs.useCase && <span className="err">{errs.useCase}</span>}
+        </div>
+
+        <div className="form-meta">
+          <span className="small">
+            We do not store this beyond the reply thread. No analytics, no tracking pixels.
+          </span>
+          <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {submitting ? "Submitting…" : "Request access"}
+            <span className="arrow" aria-hidden="true">→</span>
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  const root = ReactDOM.createRoot(document.getElementById("contact-form-root"));
+  root.render(<ContactForm />);
+</script>
+
+</body>
+</html>
