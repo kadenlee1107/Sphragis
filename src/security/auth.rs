@@ -160,6 +160,14 @@ pub fn authenticate(input: &str) -> AuthResult {
     if is_correct {
         ATTEMPT_COUNT.store(0, Ordering::Release);
         AUTHENTICATED.store(true, Ordering::Release);
+        // SP-AUD-003.1 wave 2 (2026-05-16): emit AuthSession
+        // category on successful unlock. NIAP FAU_GEN.1.1.b
+        // mandates "authenticated session lifecycle" events; this
+        // is the session-open. Session-close is on lock().
+        crate::security::audit::record(
+            crate::security::audit::Category::AuthSession,
+            b"unlock success",
+        );
         return AuthResult::Success;
     }
 
@@ -231,6 +239,13 @@ pub fn lock() {
     // V8-ROOT-4: Release so a follow-up is_authenticated() call from another
     // CPU sees the lock immediately (paired with Acquire-load).
     AUTHENTICATED.store(false, Ordering::Release);
+    // SP-AUD-003.1 wave 2 (2026-05-16): session-close per NIAP
+    // FAU_GEN.1.1.b. Pairs with the unlock-success event in
+    // authenticate().
+    crate::security::audit::record(
+        crate::security::audit::Category::AuthSession,
+        b"session locked",
+    );
 }
 
 /// V8-ROOT-6: panic-handler-only secret wipe. Uses volatile writes so the

@@ -215,6 +215,14 @@ pub fn consume_approval(op_id: OpId, current_time_secs: u64) -> bool {
             CONSUMED_COUNT.fetch_add(1, Ordering::Relaxed);
             audit::record(Category::Auth,
                 b"tpi: approval consumed by privileged op");
+            // SP-AUD-003.1 wave 2 (2026-05-16): NIAP FAU_GEN.1.1.b
+            // mandates "privilege escalation" events. TpiOp records
+            // the quorum-APPROVAL event (cosign); PrivEsc records the
+            // USE of the approved privilege via this consume path.
+            // Pair lets a verifier correlate approval -> consumption
+            // (with delta-time bounded by GRANT_TTL_SECS).
+            audit::record(Category::PrivEsc,
+                b"tpi: privileged op invoked via consumed approval");
             return true;
         }
     }
