@@ -117,11 +117,11 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| BLD-001 | P0 | ❌ MISSING | No SLSA-L4 provenance claimed |
+| BLD-001 | P0 | ⚠️ PARTIAL | `DESIGN_SLSA_PROVENANCE.md` published (SP-BLD-001). 5-step path L1 -> L4 (IMPL.A signed-provenance via GitHub OIDC + sigstore, .B hermetic, .C reproducible-build CI gate, .D branch protection, .E recursive dep provenance). SLSA v1.1 in-toto schema specified. Operator verification flow documented. Threat-model coverage for 5 attack classes. |
 | BLD-002 | P0 | ⚠️ PARTIAL | `scripts/check_reproducible_build.sh` exists; **unknown whether it currently passes** |
 | BLD-003 | P0 | ⚠️ PARTIAL | `scripts/build_intoto_attestation.py` exists; not wired into CI |
 | BLD-004 | P0 | ⚠️ PARTIAL | `scripts/gen_sbom.py` + `scripts/generate_sbom.py` exist; not in CI per-release |
-| BLD-005 | P0 | ❌ MISSING | No sigstore cosign signing; no Rekor entries |
+| BLD-005 | P0 | ⚠️ PARTIAL | `DESIGN_SIGSTORE_REKOR.md` published (SP-BLD-005). Sigstore + Rekor as the release-distribution layer (distinct from LMS boot-time and ML-DSA attestation runtime). Ephemeral-keys + identity-bound-Fulcio-cert + transparency-log model documented. Operator-side verifier flow with `cosign verify-blob`. Why ephemeral keys + transparency log (rejects long-lived signing keys). SP-BLD-005.IMPL adds GitHub Actions cosign-sign step + tools/release-verifier/. |
 | BLD-006 | P1 | ❌ MISSING | No documented bootstrap seed |
 | BLD-007 | P0 | ✅ HAVE | `.github/workflows/license-check.yml` runs both `cargo-deny check` and `cargo-audit --ignore RUSTSEC-2023-0071` on every push + PR. `deny.toml` enforces the license/advisory policy with the gov-grade allowlist. CI gate is live (verified via past PR runs). |
 | BLD-008 | P0 | ⚠️ PARTIAL | `DESIGN_LMS_KERNEL_SIGNING.md` published (SP-BLD-008). Release-time signing flow (offline host + state-tracked LMS keystore); boot-time verification flow (bootloader pin + 5ms verify on M4); two-hash distinction (boot-verify SHA-256 vs attest SHA-384); bootloader trust roots per platform (m1n1 / GRUB / shim / CHERIoT). SP-BLD-008.IMPL adds operator-side `tools/lms-signer/` + m1n1 verification routine + release pipeline integration. |
