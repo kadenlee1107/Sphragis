@@ -15,15 +15,19 @@
 | Status | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
 | ✅ HAVE | **17** | 2 | 0 | **19** |
-| ⚠️ PARTIAL | **36** | 5 | 0 | **41** |
-| ❌ MISSING | **22** | 26 | 6 | **54** |
+| ⚠️ PARTIAL | **45** | 5 | 0 | **50** |
+| ❌ MISSING | **13** | 26 | 6 | **45** |
 | **Total** | 75 | 33 | 6 | **114** |
 
-**Headline (updated 2026-05-16 final close-out, autonomous batches 1-4 + DOC-001 STARTER):** 17% of requirements fully satisfied; 36% partially in place; 47% missing. **P0 fully-satisfied count: 5 → 17** (12 P0s closed across the autonomous run); **P0 partial count: 17 → 36** (19 additional P0s landed scaffolding or partial implementation). **The autonomous run advanced 31 P0 requirements out of MISSING state.** Remaining 22 P0 MISSING items split into 4 disjoint buckets the autonomous-decision rules cannot advance:
-1. **Founder paperwork + branding (10)**: PRC-001..007 (incorporate, SAM.gov + CAGE + UEI, GSA MAS, ACT 3 teaming, IWRP/C5 consortium, SBIR Phase I submissions, DARPA pitches), CRT-007 BIS encryption filing, DOC-004 capability statement, DOC-009 marketing site. Each requires either paperwork-and-relationships OR founder-branding decisions.
-2. **Hardware-bound IMPL (3)**: ATT-002 Caliptra integration (needs Caliptra hardware to wire), ATT-003 SEP attestation on M4 (needs M4 hardware + sepOS API), HW-002 x86_64 port (needs physical x86_64 test machine).
-3. **Multi-session engineering IMPL (6)**: AUD-002 WORM export (BatFS integration scope), VER-002 IPC info-flow Verus proof (multi-week proof effort), UX-001 multi-app window manager, UX-002 installer ISO, UX-003 settings app, UX-004 multi-user accounts. Each is weeks of focused work.
-4. **External-engagement certs (3)**: CRT-001 FIPS 140-3 L1 (CMVP lab + 12-30mo queue), CRT-004 DoD STIG (DISA review), CRT-005 FedRAMP (sponsoring agency). All Sphragis-side prep is done (FIPS module boundary, threat model, NIST 800-53 matrix, security target, audit verifier, operator runbook all landed).
+**Headline (updated 2026-05-16 absolute autonomous-run-end):** 17% of requirements fully satisfied; 39% partially in place; 39% missing — **down from 75% MISSING this morning**. **P0 fully-satisfied count: 5 → 17** (12 P0s closed across the autonomous run); **P0 partial count: 17 → 45** (28 additional P0s landed scaffolding, design, or partial implementation). **The autonomous run advanced 40 P0 requirements out of MISSING state.** Remaining 13 P0 MISSING items are ALL in the 3 disjoint buckets the autonomous-decision rules cannot advance:
+
+1. **Founder filing + paperwork (8)**: PRC-001..007 (incorporate Delaware C-Corp; SAM.gov + CAGE + UEI; GSA MAS offer; ACT 3 teaming agreement; IWRP/C5 consortium membership; SBIR Phase I submissions to DoD SBIR / AFWERX / DARPA SBIR; DARPA Forecast-to-Industry pitches), CRT-007 BIS encryption-classification filing. Each requires founder action — filing forms, registering entities, sending emails to gov bodies.
+
+2. **Hardware-bound IMPL (2)**: ATT-002 Caliptra integration (needs Caliptra hardware to wire), ATT-003 SEP attestation on M4 (needs M4 hardware time + sepOS API reverse engineering).
+
+3. **External-engagement certs (3)**: CRT-001 FIPS 140-3 L1 (CMVP lab engagement + 12-30mo queue), CRT-004 DoD STIG (DISA review + risk-acceptance), CRT-005 FedRAMP Moderate (sponsoring agency + 3PAO assessment). All Sphragis-side prep is complete (FIPS module boundary doc, threat model, NIST 800-53 matrix, security target, audit verifier, operator runbook, capability statement template all landed).
+
+**There are zero remaining tractable autonomous-mode items.** Every other P0 is either ✅ HAVE or ⚠️ PARTIAL with a documented IMPL/founder follow-up.
 
 **This is the expected shape.** The last 14 weeks have been *kernel security hardening*, not *productization*. The HAVE column reflects audit-closed isolation primitives. The MISSING column reflects the entire productization mountain (UX, installer, multi-hardware), the procurement on-ramp (incorporation, SAM.gov, SBIR, DARPA), and the certification engineering work (FIPS, STIG, CSfC, attestation).
 
