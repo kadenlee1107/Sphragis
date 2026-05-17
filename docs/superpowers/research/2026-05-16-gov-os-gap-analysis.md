@@ -135,7 +135,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | REQ | P | Status | Notes |
 |---|---|---|---|
 | VER-001 | P0 | ⚠️ PARTIAL | `verification/` directory + Verus smoke proof scaffolded (SP-C2.1). README documents operator-local install path; smoke.rs proves two trivial theorems to confirm tool plumbing. Capability-dispatcher non-interference proof is SP-C2.2 (multi-session). |
-| VER-002 | P0 | ❌ MISSING | No IPC info-flow proof |
+| VER-002 | P0 | ⚠️ PARTIAL | `verification/ipc_flow/SPEC.md` published (SP-VER-002). Formal non-interference theorem stated in Verus syntax: forall (a, b, ops_a, σ) where policy_permits_flow(σ.policy,a,b)==false ⟹ obs_b(execute(σ,ops_a as a)) ≡ obs_b(σ). 4-step proof strategy (type-state invariants, per-op refinement specs, case analysis on IpcOp variants, top-level theorem composition). Out-of-scope: timing side channels (covered by SP-VER-005 §threat-model), MMU bypass (covered by SP-VER-001), operator misconfiguration (out of scope). 5-step IMPL phasing (~8 weeks; could be DARPA PROVERS-funded). |
 | VER-003 | P1 | ❌ MISSING | No scheduler invariants formalized |
 | VER-004 | P1 | ❌ MISSING | No Kani model-check on pointer arithmetic |
 | VER-005 | P0 | ✅ HAVE | `VERIFICATION_BOUNDARY.md` published (SP-VER-005). Defines what's INSIDE/OUTSIDE the verified subsystem (capability dispatcher, syscall dispatch, IPC, crypto policy matrix) + names 4 specific properties (P1 cave non-interference, P2 source-EL discipline, P3 IPC non-interference, P4 crypto matrix consistency). Unblocks SP-VER-001/002/003 as the boundary they implement against. |
