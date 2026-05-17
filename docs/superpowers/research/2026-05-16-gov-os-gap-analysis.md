@@ -91,7 +91,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| ATT-001 | P0 | ⚠️ PARTIAL | `src/security/attest.rs` (SP-C1.1) defines API: `Claims`, `Quote`, `KernelMeasurement`, `CaveIdentity`, `quote()`, `verify_quote_local()`. Signature is ML-DSA-87 (CNSA 2.0 cat-5). In-memory key today; hardware-rooted key chain is SP-C1.4 (SEP) / SP-C1.5 (Caliptra). `attest-smoke` shell command exercises round-trip + tamper-detect. |
+| ATT-001 | P0 | ⚠️ PARTIAL | `src/security/attest.rs` (SP-C1.1 + SP-C1.2) defines API: `Claims`, `Quote`, `KernelMeasurement`, `CaveIdentity`, `quote()`, `verify_quote_local()`. Signature is ML-DSA-87 (CNSA 2.0 cat-5). **SP-C1.2 wired real kernel measurement** — SHA-384 of `__text_start..__text_end + __rodata_start..__rodata_end` computed at boot via `init_kernel_measurement()`, cached in `MEASUREMENT`. In-memory attestation key still today; hardware-rooted key chain is SP-C1.4 (SEP) / SP-C1.5 (Caliptra). `attest-smoke` shell command exercises round-trip + tamper-detect. |
 | ATT-002 | P0 | ❌ MISSING | No Caliptra integration |
 | ATT-003 | P0 | ❌ MISSING | No SEP attestation flow |
 | ATT-004 | P1 | ❌ MISSING | No TPM 2.0 integration |

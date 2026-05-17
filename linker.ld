@@ -16,6 +16,8 @@ SECTIONS
 {
     . = 0x40200000;
 
+    __text_start = .;       /* SP-C1.2: attest::kernel measurement boundary */
+
     .text : {
         KEEP(*(.text.boot))
         *(.text .text.*)
@@ -37,11 +39,13 @@ SECTIONS
     . = ALIGN(0x200000);    /* 2 MB align so MMU 2 MB blocks can split here */
     __text_end = .;         /* end of executable kernel code (W^X boundary) */
 
+    __rodata_start = .;     /* SP-C1.2: attest measurement boundary */
     .rodata : {
         *(.rodata .rodata.*)
     }
-
     . = ALIGN(4096);
+    __rodata_end = .;       /* SP-C1.2: attest measurement boundary */
+
     .data : {
         *(.data .data.*)
     }

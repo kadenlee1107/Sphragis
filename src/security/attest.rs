@@ -69,7 +69,6 @@ use alloc::vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::crypto::pq_cnsa::{Dsa87Key, verify_mldsa87, MLDSA87_PK_LEN, MLDSA87_SIG_LEN};
-use crate::crypto::sha384;
 
 /// Length of a SHA-384 kernel measurement.
 pub const KERNEL_MEASUREMENT_LEN: usize = 48;
@@ -110,16 +109,69 @@ impl Claims {
 pub struct KernelMeasurement(pub [u8; KERNEL_MEASUREMENT_LEN]);
 
 impl KernelMeasurement {
-    /// Return the current kernel measurement. SP-C1.2 wires the real
-    /// computation; today returns a deterministic placeholder
-    /// (SHA-384 of a static string) so verifiers can match.
+    /// Return the current kernel measurement. Read from `MEASUREMENT`
+    /// after `init_kernel_measurement()` runs at boot. Before init,
+    /// returns the placeholder bytes (all-zero).
     pub fn current() -> Self {
-        // Placeholder. SP-C1.2 will replace with:
-        //   sha384::hash(&kernel_image_bytes)
-        // where kernel_image_bytes spans the linker symbols
-        // __kernel_text_start..__kernel_text_end + the rodata range.
-        let h = sha384::hash(b"sphragis kernel measurement placeholder (SP-C1.1)");
-        Self(h)
+        unsafe {
+            let ptr = core::ptr::addr_of!(MEASUREMENT);
+            Self(*ptr)
+        }
+    }
+}
+
+unsafe extern "C" {
+    /// SP-C1.2: linker-script-provided boundary of the .text section.
+    /// Defined in `linker.ld` / `linker_apple.ld`. These are symbols,
+    /// not values — take their addresses with `core::ptr::addr_of`.
+    static __text_start: u8;
+    static __text_end: u8;
+    static __rodata_start: u8;
+    static __rodata_end: u8;
+}
+
+/// Slot for the kernel measurement, populated once at boot by
+/// `init_kernel_measurement()`. Read by `KernelMeasurement::current()`.
+static mut MEASUREMENT: [u8; KERNEL_MEASUREMENT_LEN] = [0u8; KERNEL_MEASUREMENT_LEN];
+static MEASUREMENT_INIT: AtomicBool = AtomicBool::new(false);
+
+/// Compute and cache the SHA-384 hash of the loaded kernel image
+/// (text section + rodata). Must be called once at boot, BEFORE any
+/// caller invokes `KernelMeasurement::current()` for a real claim.
+///
+/// Safe to call multiple times — only the first call computes; later
+/// calls return early.
+///
+/// SAFETY: reads linker-provided memory ranges `__text_start..__text_end`
+/// and `__rodata_start..__rodata_end`. Those ranges are mapped read-
+/// executable / read-only respectively in the kernel page tables; the
+/// read is always safe under EL1.
+pub fn init_kernel_measurement() {
+    if MEASUREMENT_INIT.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    unsafe {
+        let text_start = core::ptr::addr_of!(__text_start) as usize;
+        let text_end = core::ptr::addr_of!(__text_end) as usize;
+        let rodata_start = core::ptr::addr_of!(__rodata_start) as usize;
+        let rodata_end = core::ptr::addr_of!(__rodata_end) as usize;
+
+        let text_len = text_end.saturating_sub(text_start);
+        let rodata_len = rodata_end.saturating_sub(rodata_start);
+
+        let text_slice = core::slice::from_raw_parts(text_start as *const u8, text_len);
+        let rodata_slice = core::slice::from_raw_parts(rodata_start as *const u8, rodata_len);
+
+        // SHA-384 streaming over (text || rodata).
+        use sha2::{Sha384 as Sha384Hasher, Digest};
+        let mut hasher = Sha384Hasher::new();
+        hasher.update(text_slice);
+        hasher.update(rodata_slice);
+        let out = hasher.finalize();
+        let ptr = core::ptr::addr_of_mut!(MEASUREMENT);
+        (*ptr).copy_from_slice(&out);
+
+        crate::drivers::uart::puts("  [attest] kernel measurement computed (SHA-384 of text+rodata)\n");
     }
 }
 
