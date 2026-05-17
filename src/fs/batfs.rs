@@ -1121,6 +1121,22 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
     rebuild_merkle();
     seal_merkle_root();  // AUDIT-FS-C3
 
+    // SP-AUD-003 emit-site (2026-05-16): record file-mutation events.
+    // Skip the audit-internal paths (audit/worm/*, audit.log,
+    // audit-binary.log) to avoid recursion via audit_worm::worm_append
+    // → batfs::create → audit::record → audit_worm::worm_append.
+    if !name.starts_with("audit/") && name != "audit.log" && name != "audit-binary.log" {
+        let mut msg = [0u8; 192];
+        let prefix = b"FileAccess: create ";
+        let nlen = name.len().min(192 - prefix.len());
+        msg[..prefix.len()].copy_from_slice(prefix);
+        msg[prefix.len()..prefix.len() + nlen].copy_from_slice(&name.as_bytes()[..nlen]);
+        crate::security::audit::record(
+            crate::security::audit::Category::FileAccess,
+            &msg[..prefix.len() + nlen],
+        );
+    }
+
     Ok(())
 }
 
@@ -1233,6 +1249,21 @@ pub fn delete(name: &str) -> Result<(), &'static str> {
     // Update Merkle tree
     rebuild_merkle();
     seal_merkle_root();  // AUDIT-FS-C3
+
+    // SP-AUD-003 emit-site (2026-05-16): record file deletion. Same
+    // audit-internal-path filter as create() to avoid recursion.
+    if !name.starts_with("audit/") && name != "audit.log" && name != "audit-binary.log" {
+        let mut msg = [0u8; 192];
+        let prefix = b"FileAccess: delete ";
+        let nlen = name.len().min(192 - prefix.len());
+        msg[..prefix.len()].copy_from_slice(prefix);
+        msg[prefix.len()..prefix.len() + nlen].copy_from_slice(&name.as_bytes()[..nlen]);
+        crate::security::audit::record(
+            crate::security::audit::Category::FileAccess,
+            &msg[..prefix.len() + nlen],
+        );
+    }
+
     Ok(())
 }
 
