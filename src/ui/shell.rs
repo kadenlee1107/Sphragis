@@ -403,6 +403,7 @@ fn execute_inner(cmd: &str) {
         "hash" => cmd_hash(parts[1], parts[2]),
         // "ai" command removed 2026-05-16 per SP-A2 (AGENT app dropped;
         // anti-feature ANTI-002).
+        "lms-kat" => cmd_lms_kat(),
         "tcp-selftest" => cmd_tcp_selftest(),
         "tcp-listen" => cmd_tcp_listen(parts[1]),
         "tcp-list" => cmd_tcp_list(),
@@ -10878,6 +10879,23 @@ fn cmd_dmesg(arg: &str) {
 
 // cmd_ai removed 2026-05-16 per SP-A2 (drop AGENT app). See ANTI_FEATURES.md
 // §ANTI-002 — AI in the kernel TCB is anti-feature for gov-grade positioning.
+
+/// On-demand LMS KAT. Generates a fresh H5 keypair (~30-60s under
+/// QEMU emulation), signs a fixed message, verifies it, then runs
+/// tamper-detection. Prints `[lms-kat] PASS` or `[lms-kat] FAIL <reason>`.
+/// Exposed as a shell command rather than wired into boot self-tests
+/// because LMS keygen is too slow for the boot-smoke timeout window.
+fn cmd_lms_kat() {
+    console::puts("[lms-kat] start (keygen H5/W1 — may take ~30s under emulation)\n");
+    match crate::crypto::lms::kat() {
+        Ok(()) => console::puts("[lms-kat] PASS\n"),
+        Err(e) => {
+            console::puts("[lms-kat] FAIL ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
+}
 
 /// Dump the security posture — single command that touches every
 /// module the cluster-A-through-H work shipped. Useful as a

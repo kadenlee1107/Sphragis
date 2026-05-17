@@ -126,6 +126,7 @@ xts-mode = { version = "0.5", default-features = false }
 # constructions and as a fallback MAC when HMAC-SHA2 isn't acceptable.
 cmac = { version = "0.7", default-features = false }
 x509-ocsp = { version = "0.2", default-features = false }
+hbs-lms = { version = "0.1.1", default-features = false }
 
 [profile.dev]
 panic = "abort"
