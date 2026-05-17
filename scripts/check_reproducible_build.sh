@@ -28,7 +28,14 @@ PASS_B="$REPO/out/repro_b.sha256"
 #     info doesn't embed the local cwd.
 #   * codegen-units=1 + incremental=false avoids subtle ordering diffs.
 export SOURCE_DATE_EPOCH=946684800   # 2000-01-01T00:00:00Z
-export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$REPO=/build/sphragis -C codegen-units=1"
+# SP-BLD-002 closure (2026-05-16): RUSTFLAGS / CARGO_ENCODED_RUSTFLAGS
+# OVERRIDE the project's .cargo/config.toml rustflags (which include
+# -C link-arg=-Tlinker.ld and the security-mitigation flags). We need
+# the additive behavior. The simplest robust path: replicate the
+# project rustflags here PLUS the determinism knobs. Keep this list in
+# sync with .cargo/config.toml manually (CI gate ensures the build
+# stays clean if either drifts).
+export CARGO_ENCODED_RUSTFLAGS=$'-C\x1flink-arg=-Tlinker.ld\x1f-Zfixed-x18\x1f-Z\x1fstack-protector=all\x1f-C\x1ftarget-feature=+paca,+pacg,+bti\x1f-Z\x1fbranch-protection=bti,pac-ret\x1f'"--remap-path-prefix=$REPO=/build/sphragis"$'\x1f-C\x1fcodegen-units=1'
 export CARGO_INCREMENTAL=0
 
 mkdir -p "$REPO/out"
