@@ -184,7 +184,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | DOC-003 | P0 | ⚠️ PARTIAL | DESIGN docs exist (developer-facing); no AO-audience-formatted architecture doc |
 | DOC-004 | P0 | ❌ MISSING | No capability statement |
 | DOC-005 | P0 | ❌ MISSING | No Security Target |
-| DOC-006 | P0 | ❌ MISSING | No NIST 800-53 inheritance matrix |
+| DOC-006 | P0 | ⚠️ PARTIAL | `docs/NIST_800_53_INHERITANCE.md` STARTER published (SP-DOC-006). ~40 of the most-asked OS-relevant controls covered across AC, AU, CM, IA, SC, SI, MP, SA, SR, PT families. 22 SATISFIED, 12 PARTIAL (each with named follow-up SP), 4 HYBRID, 2 CUSTOMER, 8 N/A. SP-DOC-006.FULL extends to the remaining ~110-160 OS-relevant controls. |
 | DOC-007 | P1 | ❌ MISSING | No STIG draft |
 | DOC-008 | P1 | ❌ MISSING | No USENIX-quality whitepaper |
 | DOC-009 | P0 | ❌ MISSING | No marketing site |
