@@ -486,16 +486,16 @@ fn compute_file_mac(name: &str, nonce: &[u8; 12], ciphertext: &[u8]) -> [u8; 32]
     // mixed it into the pads.
     crate::security::zeroize::zeroize(&mut key);
 
-    // Inner hash: SHA-256(i_pad || "batfs-integrity-v1" || name || nonce || ciphertext)
-    // Historical HMAC domain-separator from the Bat_OS naming era.
-    // Preserve the exact byte string: changing it would silently
-    // invalidate the integrity MAC of every existing file on every
-    // pre-rename SealFS image. The Rust identifier names + UI
-    // strings now say SealFS; only this HMAC context literal is
-    // frozen for backwards compat.
+    // Inner hash: SHA-256(i_pad || "sealfs-integrity-v2" || name || nonce || ciphertext)
+    // Version bumped from v1 to v2 alongside the 2026-05-17 byte-
+    // constant rename (BATFS magic + HMAC + KDF salts all rolled
+    // forward in one breaking change while still pre-production).
+    // Any file MAC'd under "batfs-integrity-v1" will fail to verify
+    // — that's the desired behavior, since the disk magic also
+    // changed and a pre-rename image won't even mount.
     let mut inner = sha256::Sha256::new();
     inner.update(&i_pad);
-    inner.update(b"batfs-integrity-v1");
+    inner.update(b"sealfs-integrity-v2");
     inner.update(name.as_bytes());
     inner.update(nonce);
     inner.update(ciphertext);

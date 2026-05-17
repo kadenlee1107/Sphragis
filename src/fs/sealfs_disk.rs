@@ -17,12 +17,14 @@
 // ─── On-disk layout ─────────────────────────────────────────────────
 //
 // Sector 0 (512B): Superblock
-// magic "BATFS\0\0\0", version, layout
+// magic "SEALFS\0\0", version, layout
 // constants, FS UUID, FS salt, boot
 // counter, HMAC-SHA256 over the rest.
-// (Magic bytes are historical from the Bat_OS naming era; the
-// on-disk format is unchanged across the SealFS rename so existing
-// disk images mount without reformatting.)
+// (Magic + KDF salts + HMAC domain separator all bumped from the
+// BATFS-era values on 2026-05-17 as part of the final Bat_OS ->
+// Sphragis cleanup. Pre-rename images won't mount under this build
+// — by design; SB_VERSION also bumped to 2 to make the break
+// detectable.)
 //
 // Sectors 1..64 (32KB): Inode table
 // 128 entries × 256B each.
@@ -90,13 +92,16 @@ const INODE_COUNT:  u64   = (DISK_MAX_FILES * INODE_SIZE / SECTOR_SIZE) as u64; 
 const DATA_START:   u64   = INODE_START + INODE_COUNT;                          // 65
 const TOTAL_SECTORS_NEEDED: u64 = DATA_START + (DISK_MAX_FILES as u64) * SLOT_SECTORS;
 
-// Historical magic from the Bat_OS naming era. The on-disk format
-// is unchanged across the SealFS rename — existing disk images
-// continue to mount, so the magic bytes stay as `BATFS\0\0\0`.
-// (The Rust identifier names + UI strings now say SealFS; only the
-// 8 magic bytes on sector 0 are frozen for backwards compat.)
-const SB_MAGIC:     [u8; 8] = *b"BATFS\0\0\0";
-const SB_VERSION:   u32     = 1;
+// Disk magic. Renamed BATFS -> SEALFS on 2026-05-17 as part of the
+// final Bat_OS -> Sphragis cleanup. Pre-production codebase had no
+// shipped customer disks; the only in-repo image (state/batfs.img)
+// was an orphaned test fixture (the QEMU boot script auto-creates
+// state/sealfs.img on each run). SB_VERSION bumped to 2 to make the
+// format break explicit — readers that find a BATFS-magic'd disk
+// can detect it as a legacy fixture and refuse cleanly rather than
+// silently mis-parse.
+const SB_MAGIC:     [u8; 8] = *b"SEALFS\0\0";
+const SB_VERSION:   u32     = 2;
 
 // Compile-time layout sanity. The magic + the rest of the metadata
 // must fit in one sector with room left for the HMAC.
