@@ -1,7 +1,7 @@
 # Sphragis NIST SP 800-53 Rev. 5.2.0 Control Inheritance Matrix
 
-**Document version:** 1.1 (SP-DOC-006, AC + AU complete; other families STARTER; 2026-05-16)
-**Coverage:** AC family complete (25 controls), AU family complete (16 controls), STARTER coverage of CM, IA, SC, SI, MP, SA, SR, PT (~25 additional controls). Total ~66 controls of the 1,196 in Rev. 5.2.0. Full matrix is SP-DOC-006.FULL.
+**Document version:** 1.2 (SP-DOC-006, AC + AU + CM + IA complete; other families STARTER; 2026-05-16)
+**Coverage:** AC family complete (25 controls), AU family complete (16 controls), CM family complete (14 controls), IA family complete (12 controls), STARTER coverage of SC, SI, MP, SA, SR, PT (~25 additional controls). Total ~80 controls of the 1,196 in Rev. 5.2.0. Full matrix is SP-DOC-006.FULL.
 **Audience:** FedRAMP-customer security teams, AOs scoping ATO boundaries, SSP authors who need to know which controls Sphragis SATISFIES vs INHERITS FROM CUSTOMER vs PARTIALLY ADDRESSES.
 **Companion docs:** `docs/FIPS_140_3_MODULE_BOUNDARY.md` (crypto-module boundary), `docs/THREAT_MODEL.md` (adversaries + mitigations), `VERIFICATION_BOUNDARY.md` (verified subsystem scope).
 
@@ -256,7 +256,13 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 
 ---
 
-## CM — Configuration Management
+## CM — Configuration Management (complete family, 14 controls)
+
+### CM-1 — Policy and Procedures
+
+**Status:** PARTIAL.
+**Claim:** Vendor-side: `CLAUDE.md` (project onboarding), `docs/DISCLOSURE_POSTURE.md` (Tier-1/2/3 disclosure rules), `CONTRIBUTING.md` + DCO sign-off enforcement, branch-protection (no direct main commits; feat/<id> + `--no-ff` merge required). CM activities are reviewed against the rolling security audit (latest 2026-05-15, 149 findings).
+**Customer gap:** Customer adopts and tailors their organizational CM policy; documents Sphragis-update review and authorization roles.
 
 ### CM-2 — Baseline Configuration
 
@@ -270,11 +276,23 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 **Claim:** Sphragis itself uses Git + feature-branch + --no-ff + DCO sign-off; Apache-2.0 license clarity. CI gates (cargo-deny + cargo-audit) prevent license / advisory drift.
 **Customer gap:** Customer documents their change-control process for Sphragis upgrades within their environment.
 
+### CM-4 — Impact Analyses
+
+**Status:** PARTIAL.
+**Claim:** Every kernel-surface change is gated by the rolling security audit (Cave-H / Cave-C / CRY / FS findings tracked end-to-end). PR checklist (per branch-protection) requires reviewer sign-off on security-affecting changes. SP-DOC-002 threat model is updated when adversary capabilities change.
+**Customer gap:** Customer performs change-impact analyses for their environment-specific integrations (driver shims, custom cave policies) before deploying a Sphragis upgrade.
+
 ### CM-5 — Access Restrictions for Change
 
 **Status:** PARTIAL.
 **Claim:** Loadable kernel modules require LMS-signed packages (SP-BLD-008 future; design landed SP-BLD-008 doc). Update-apply audit category emit (SP-AUD-003) ready.
 **Customer gap:** Customer establishes their signing-authority policy for what gets installed.
+
+### CM-6 — Configuration Settings
+
+**Status:** PARTIAL.
+**Claim:** Build profile pinned by compile-time gov-strict feature flag (SP-B1.6 policy gate; const-eval enum allowlist); runtime config (cave policies, firewall rules) lives in BatFS-backed `/etc/sphragis/` with WORM audit trail on changes (SP-AUD-002). Reproducible build (SP-BLD-002 VERIFIED) lets the operator compare an installed kernel ELF against an expected SHA-256.
+**Customer gap:** Customer documents which build profile + cave-policy set is approved for their deployment; runs SHA-256 verification at install time.
 
 ### CM-7 — Least Functionality
 
@@ -288,15 +306,51 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 **Claim:** SBOM generation per release; `docs/HARDWARE_COMPATIBILITY.md` documents supported platforms with per-platform driver coverage + attestation root.
 **Customer gap:** Customer maintains their deployment-side inventory (which devices run Sphragis at which version).
 
+### CM-9 — Configuration Management Plan
+
+**Status:** PARTIAL.
+**Claim:** Vendor-side CM plan is encoded across CLAUDE.md (workflow), branch-protection (gating), audit-week log (rolling change record), release-notes per tag. SP-DOC-001 (operator runbook) STARTER covers customer-facing CM responsibilities.
+**Customer gap:** Customer authors their own CM plan for the Sphragis-as-a-component context (release-train cadence, rollback approach, approval matrix).
+
+### CM-10 — Software Usage Restrictions
+
+**Status:** PARTIAL.
+**Claim:** Apache-2.0 + DCO sign-off; ANTI_FEATURES.md enumerates capabilities deliberately absent (no in-tree browser, no telemetry, no field-loadable closed binaries). License gate enforced in CI (`cargo deny check licenses`) — proprietary-only or GPL/AGPL deps are blocked at PR time.
+**Customer gap:** Customer documents their usage-restriction policy (e.g., which third-party caves are permitted to install).
+
 ### CM-11 — User-Installed Software
 
 **Status:** PARTIAL.
 **Claim:** No package manager today; only LMS-signed kernel updates (SP-BLD-008 design landed). Future SP-UX-005 adds TUF-protocol package management.
 **Customer gap:** Customer prohibits user-installed software via cave-policy until SP-UX-005 lands.
 
+### CM-12 — Information Location
+
+**Status:** PARTIAL.
+**Claim:** BatFS provides per-cave encrypted storage with documented mount points; cross-cave reads require explicit capability grants (capability-system enforced). Audit ring records every file open/close with cave-attribution.
+**Customer gap:** Customer maintains the data-location inventory of which caves hold which categories of customer data.
+
+### CM-13 — Data Action Mapping
+
+**Status:** CUSTOMER.
+**Claim:** Sphragis provides the substrate (per-cave isolation + capability grants + WORM audit); customer maps data actions to caves and roles for their compliance regime.
+**Customer gap:** Customer authors and maintains the data-action mapping; reviews per their compliance schedule.
+
+### CM-14 — Signed Components
+
+**Status:** PARTIAL.
+**Claim:** Kernel + boot chain: LMS-signed update bundles (SP-BLD-008 design landed; SP-B1.3.1 LMS boot KAT VERIFIED). User-cave packages: future SP-UX-005 (TUF-protocol) extends signing to all installed components.
+**Customer gap:** Customer holds their signing-authority keys per SP-C1.6 HSM-backed operator-CA design; enforces "signed only" install policy via cave-policy until SP-UX-005 lands.
+
 ---
 
-## IA — Identification and Authentication
+## IA — Identification and Authentication (complete family, 12 controls)
+
+### IA-1 — Policy and Procedures
+
+**Status:** PARTIAL.
+**Claim:** Single-operator passphrase model + TPI documented in `docs/THREAT_MODEL.md`. Authenticator-lifecycle (rotation, retirement, lockout) implemented in operator-CA + LMS HBS keys; audit category emits on every credential lifecycle event (SP-AUD-003).
+**Customer gap:** Customer adopts and tailors their IA policy; documents the user-to-cave binding policy until SP-UX-004 federated identity lands.
 
 ### IA-2 — Identification and Authentication (Organizational Users)
 
@@ -310,11 +364,23 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 **Claim:** Per-cave attestable identity (SP-C1.3 per-cave registry); kernel-rooted attestation API (SP-C1.1/C1.2). Endorsement-chain via HSM-backed operator-CA design (SP-C1.6 design landed).
 **Customer gap:** SP-C1.4 (SEP) / SP-C1.5 (Caliptra) move attestation root to hardware. Until then, attestation is in-memory.
 
+### IA-4 — Identifier Management
+
+**Status:** PARTIAL.
+**Claim:** Per-cave identifier is the immutable creation-time attestable identity (SP-ATT-005 auto-registers cave-id measurement into the per-cave identity registry; SHA-384 over slot+name). Reuse policy: cave slots are released only after unregister-on-destroy.
+**Customer gap:** Customer documents the human-to-cave assignment policy. User-level identifier management is SP-UX-004.
+
 ### IA-5 — Authenticator Management
 
 **Status:** SATISFIED.
 **Claim:** Passphrase rotation gated by TPI quorum + old-passphrase entry. Argon2id memory-hardness against brute force. Per-attempt lockout.
 **Customer gap:** Customer documents passphrase complexity + rotation cadence.
+
+### IA-6 — Authentication Feedback
+
+**Status:** SATISFIED.
+**Claim:** Passphrase entry never echoes characters (kernel UI suppresses; tested in security app). Lock-screen failures emit count-only feedback ("attempt N of K"), never partial-match hints. TPI quorum prompts never reveal who else has voted until all-or-fail.
+**Customer gap:** None — vendor implements; operator policy can configure max-attempts before lockout.
 
 ### IA-7 — Cryptographic Module Authentication
 
@@ -328,11 +394,29 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 **Claim:** WireGuard peer authentication (Noise-IK pattern, per-peer pre-shared static keys). TLS mTLS supported.
 **Customer gap:** Customer establishes their peer-authentication infrastructure.
 
+### IA-9 — Service Identification and Authentication
+
+**Status:** PARTIAL.
+**Claim:** Per-cave services within Sphragis authenticate via the capability-system (signed grants); cross-cave IPC over MLS with PolicyRejected at the gate when a weak suite is offered (SP-B1.6.2). Network services (WireGuard, TLS) use mTLS or Noise-IK pre-shared static keys.
+**Customer gap:** Customer establishes inter-system service-auth (e.g., service-mesh mTLS roots) beyond the Sphragis node boundary.
+
+### IA-10 — Adaptive Authentication
+
+**Status:** N/A.
+**Claim:** Sphragis intentionally avoids adaptive (risk-scoring) authentication; the authenticator strength is fixed and high (Argon2id + TPI) rather than risk-modulated, per the THREAT_MODEL.md no-implicit-trust posture.
+**Customer gap:** Customer that requires risk-adaptive auth layers it at a federated identity provider, not on Sphragis.
+
 ### IA-11 — Re-authentication
 
 **Status:** SATISFIED.
 **Claim:** Lock-screen requires re-authentication. TPI quorum is per-op (one-shot consume).
 **Customer gap:** Customer documents the operational cadence.
+
+### IA-12 — Identity Proofing
+
+**Status:** CUSTOMER.
+**Claim:** Sphragis-vendor enrollment uses operator-CA endorsement (SP-C1.6 HSM-backed) for cave-identity attestation roots. Human-user identity proofing is out of scope for an OS.
+**Customer gap:** Customer runs human-user identity proofing against an external trusted authority before binding human users to caves.
 
 ---
 
@@ -500,23 +584,23 @@ This is a **STARTER** matrix covering the OS-relevant families' most-frequently-
 
 ## Summary verdict
 
-Of the ~66 controls covered in v1.1 (AC + AU complete + STARTER coverage of CM/IA/SC/SI/MP/SA/SR/PT):
+Of the ~80 controls covered in v1.2 (AC + AU + CM + IA complete + STARTER coverage of SC/SI/MP/SA/SR/PT):
 
 | Verdict | Count |
 |---|---|
-| SATISFIED | 33 |
-| PARTIAL | 18 |
+| SATISFIED | 34 |
+| PARTIAL | 29 |
 | HYBRID | 4 |
-| CUSTOMER | 3 |
-| N/A | 8 (PT family aggregated + AC-10/13/15/16/22 individually) |
+| CUSTOMER | 5 |
+| N/A | 9 (PT family aggregated + AC-10/13/15/16/22 + IA-10 individually) |
 
-Sphragis fully addresses **~50%** of covered controls at the OS layer; another **~27%** are partially addressed (with named SP-X for the remainder); **~10%** are hybrid + customer-collaboration; **~13%** are N/A at the OS layer.
+Sphragis fully addresses **~43%** of covered controls at the OS layer; another **~36%** are partially addressed (with named SP-X for the remainder); **~11%** are hybrid + customer-collaboration; **~11%** are N/A at the OS layer.
 
-AC + AU now have FULL family coverage (25 + 16 = 41 controls). Other families still STARTER. SP-DOC-006.FULL extends remaining families.
+AC + AU + CM + IA now have FULL family coverage (25 + 16 + 14 + 12 = 67 controls). Other families still STARTER. SP-DOC-006.FULL extends remaining families.
 
 ## What SP-DOC-006.FULL adds
 
-The remaining ~1,156 controls from the full Rev. 5.2.0 catalog. Most are not OS-vendor-relevant (e.g., the entire PE family is physical security, IR is incident response, PM is program management). The OS-relevant subset is ~150-200 controls; this starter matrix covers the ~40 most-asked-about. SP-DOC-006.FULL adds the remaining ~110-160 OS-relevant controls + marks the non-OS-relevant ones as "N/A — customer/application-layer".
+The remaining ~1,116 controls from the full Rev. 5.2.0 catalog. Most are not OS-vendor-relevant (e.g., the entire PE family is physical security, IR is incident response, PM is program management). The OS-relevant subset is ~150-200 controls; this starter matrix covers ~80 of the most-asked-about. SP-DOC-006.FULL adds the remaining ~70-120 OS-relevant controls + marks the non-OS-relevant ones as "N/A — customer/application-layer".
 
 ## REQ traceability
 
