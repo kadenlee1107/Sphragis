@@ -12,6 +12,7 @@ pub mod rng;
 pub mod sha256;
 pub mod sha3;
 pub mod sha384;
+pub mod sha512;
 pub mod sig;
 pub mod totp;
 pub mod xchacha20poly1305;
@@ -49,6 +50,10 @@ pub fn run_self_tests() -> Result<(), &'static str> {
 
     // AES-128 + AES-256 GCM (NIST SP 800-38D) via existing selftest.
     gcm_verified::selftest()?;
+
+    // SHA-512 FIPS 180-4 §F.3 "abc" KAT + HMAC-SHA-512 determinism
+    // smoke (SP-B1.5 / SP-B1.7 partial; REQ-CRY-005).
+    sha512::kat()?;
 
     // Fail-closed RNG smoke (AUDIT-FS-H3 / SP-B1.8): if the CPU
     // exposes RNDR, verify the strict-mode fill_bytes succeeds and
