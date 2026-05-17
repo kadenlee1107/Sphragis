@@ -1,0 +1,104 @@
+# SP-BLD-005 (2026-05-16) — Release signing with sigstore + Rekor.
+#
+# When a tag of the form v* is pushed, this workflow:
+#   1. Builds the kernel ELF for aarch64-unknown-none (release).
+#   2. Generates the SBOM (scripts/gen_sbom.py).
+#   3. Signs both with sigstore using OIDC-keyless (Fulcio short-lived
+#      cert tied to the GitHub Actions identity for kadenlee1107/Sphragis).
+#   4. Records the signatures in the Rekor transparency log.
+#   5. Uploads the signed artifacts + .sig + .crt to the GitHub Release.
+#
+# OPERATOR-SIDE VERIFICATION (per DESIGN_SIGSTORE_REKOR.md):
+#
+#   cosign verify-blob \
+#       --certificate sphragis.crt \
+#       --signature sphragis.sig \
+#       --certificate-identity-regexp '^https://github.com/kadenlee1107/Sphragis/' \
+#       --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+#       sphragis
+#
+# That command:
+#   - Validates the Fulcio cert chains to the sigstore root.
+#   - Confirms the cert was issued for the kadenlee1107/Sphragis repo.
+#   - Confirms the signature matches the artifact bytes.
+#   - Optionally: Rekor inclusion proof (cosign does this by default).
+#
+# WHY THIS IS IN .github-workflows-pending/ NOT .github/workflows/:
+#   GitHub OAuth scope for the autonomous Claude session does not
+#   include 'workflows' (would let us push workflow files). User
+#   manually copies this file to .github/workflows/ via the web UI
+#   or with a token that has the workflows scope.
+#
+# REQ: closes REQ-BLD-005 IMPL portion. Together with the design doc,
+# BLD-005 moves PARTIAL → HAVE once this file is in .github/workflows/
+# AND a tag has been signed at least once.
+
+name: Release Signing (sigstore + Rekor)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write     # OIDC token request to Fulcio
+  contents: write     # upload to GitHub Release
+
+jobs:
+  sign-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-unknown-none
+          components: rust-src
+
+      - name: Build release kernel
+        run: |
+          cargo build --release --target aarch64-unknown-none
+
+      - name: Generate SBOM
+        run: |
+          python3 scripts/gen_sbom.py > sphragis.sbom.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Sign kernel ELF with sigstore (OIDC-keyless)
+        run: |
+          cosign sign-blob --yes \
+            --output-certificate target/aarch64-unknown-none/release/sphragis.crt \
+            --output-signature target/aarch64-unknown-none/release/sphragis.sig \
+            target/aarch64-unknown-none/release/sphragis
+
+      - name: Sign SBOM with sigstore (OIDC-keyless)
+        run: |
+          cosign sign-blob --yes \
+            --output-certificate sphragis.sbom.crt \
+            --output-signature sphragis.sbom.sig \
+            sphragis.sbom.json
+
+      - name: Verify Rekor entries land in transparency log
+        run: |
+          cosign verify-blob \
+            --certificate target/aarch64-unknown-none/release/sphragis.crt \
+            --signature target/aarch64-unknown-none/release/sphragis.sig \
+            --certificate-identity-regexp '^https://github.com/kadenlee1107/Sphragis/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            target/aarch64-unknown-none/release/sphragis
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/aarch64-unknown-none/release/sphragis
+            target/aarch64-unknown-none/release/sphragis.crt
+            target/aarch64-unknown-none/release/sphragis.sig
+            sphragis.sbom.json
+            sphragis.sbom.crt
+            sphragis.sbom.sig
