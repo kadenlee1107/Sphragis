@@ -11,6 +11,8 @@ SECTIONS
     /* m1n1 loads payload at ~0x810000000 */
     . = 0x810000000;
 
+    __text_start = .;       /* SP-C1.2: attest measurement boundary */
+
     .text : {
         /* V-HANDOFF-2: _apple_start must land at offset 0 of the raw
          * binary so m1n1's chainload `--entry-point 0` jumps straight
@@ -26,11 +28,13 @@ SECTIONS
     . = ALIGN(0x200000);    /* 2 MB align so MMU 2 MB blocks can split here */
     __text_end = .;         /* end of executable kernel code (W^X boundary) */
 
+    __rodata_start = .;     /* SP-C1.2: attest measurement boundary */
     .rodata : {
         *(.rodata .rodata.*)
     }
-
     . = ALIGN(4096);
+    __rodata_end = .;       /* SP-C1.2: attest measurement boundary */
+
     .data : {
         *(.data .data.*)
     }

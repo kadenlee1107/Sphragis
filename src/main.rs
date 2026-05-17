@@ -247,6 +247,14 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // call so chain entries are HMAC-protected from the first event.
     security::audit_chain::init_audit_key();
 
+    // SP-C1.2 (2026-05-16): compute the kernel measurement (SHA-384
+    // of .text + .rodata via linker symbols). Cached for later
+    // attest::quote calls. Order: after audit-key init so any
+    // post-measurement audit log entry is HMAC-protected; before any
+    // attest::quote caller (none exist yet at boot, but cement the
+    // ordering invariant now).
+    security::attest::init_kernel_measurement();
+
     // AUDIT-CRYPTO-F7 (2026-05-15): fail-closed boot-time crypto
     // self-tests. Run KATs for every primitive used in production
     // BEFORE any TLS / BatFS / IPC mount. The prior pattern was to
