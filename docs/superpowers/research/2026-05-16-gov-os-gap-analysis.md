@@ -14,9 +14,9 @@
 
 | Status | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| ✅ HAVE | **28** | 3 | 0 | **31** |
+| ✅ HAVE | **28** | 4 | 0 | **32** |
 | ⚠️ PARTIAL | **34** | 6 | 1 | **41** |
-| ❌ MISSING | **13** | 24 | 5 | **42** |
+| ❌ MISSING | **13** | 23 | 5 | **41** |
 | **Total** | 75 | 33 | 6 | **114** |
 
 **Headline (updated 2026-05-16 end of run 2, start of run 3):** 25% of requirements fully satisfied; 38% partially in place; 37% missing — **down from 75% MISSING this morning**. **P0 fully-satisfied count: 5 → 26** (21 P0s closed across runs 1+2); **P0 partial count: 17 → 36** (after additional 9 advances P0 PARTIAL → HAVE in run 2 depth pass). **Cumulative: 45 P0 requirements advanced out of MISSING state since this morning** (run 1 breadth + run 2 depth). Remaining 13 P0 MISSING items are ALL in the 3 disjoint buckets the autonomous-decision rules cannot advance:
@@ -196,7 +196,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | DOC-007 | P1 | ❌ MISSING | No STIG draft |
 | DOC-008 | P1 | ❌ MISSING | No USENIX-quality whitepaper |
 | DOC-009 | P0 | ⚠️ PARTIAL | `marketing-site-scaffold/` Hugo scaffold published (SP-DOC-009 scaffold). Project structure + content templates with `{PLACEHOLDER}` strings the founder fills in. Home + technical + differentiators + contact + launch-blog page templates. Hugo + PaperMod theme rationale. Cloudflare Pages deployment instructions. Brand-identity choices intentionally NOT made (founder owns). Maintenance cadence (quarterly + per-release). |
-| DOC-010 | P1 | ❌ MISSING | No demo deck |
+| DOC-010 | P1 | ✅ HAVE | `marketing-site-scaffold/demo-deck/SPHRAGIS_DEMO_DECK_v0.md` published (SP-DOC-010). 20-slide Markdown source for gov-buyer briefings. Structure: 1 cover · 2 who-we-are · 3 category claim · 4 differentiators table · 5-9 the 5 differentiators (Rust+verif, CNSA 2.0, attestation, SLSA+WORM, CHERI) · 10-12 live demos (M4 boot, attestation round-trip, WORM verify) · 13 audit posture · 14 NIST 800-53 inheritance · 15 cert posture · 16 master-plan progress · 17 anti-features (the discipline) · 18 the ask · 19 path-to-yes risk · 20 contact. Renders via `pandoc -t beamer SPHRAGIS_DEMO_DECK_v0.md -o deck.pdf` or any Markdown-presenter (reveal-md / Marp / slidev). |
 
 ## §13. Certification Deliverables (CRT)
 
