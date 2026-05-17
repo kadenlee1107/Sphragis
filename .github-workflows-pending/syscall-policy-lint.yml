@@ -1,0 +1,45 @@
+# SP-ISO-004 (2026-05-16) — syscall cave-policy gate lint.
+#
+# On every push to main + every PR to main:
+#   Runs scripts/audit_syscall_policy.py over src/ and reports how
+#   many `sys_*` handlers explicitly reference cave_policy /
+#   active_has_cap / has_cap(...) vs. how many are bare.
+#
+# Currently runs in REPORT-ONLY mode (no --fail-on-warn). Today's
+# baseline: 91 WARN handlers (most are Linux-compat ENOSYS stubs in
+# src/caves/linux/syscall.rs). After SP-ISO-004.1 annotation pass
+# triages each WARN (either add a real gate OR add a
+# `// cave-policy: not-required (<reason>)` comment), flip this
+# workflow to `--fail-on-warn` so new handlers can't merge without
+# explicit classification.
+#
+# REQ tracking:
+#   This workflow turns ISO-004 from "no CI lint" → "report-only CI
+#   lint". After the triage pass + `--fail-on-warn` flip, ISO-004
+#   moves PARTIAL → HAVE.
+#
+# WHY THIS IS IN .github-workflows-pending/:
+#   Workflow files require the OAuth `workflows` scope which the
+#   autonomous Claude session does not hold. User copies this file
+#   to .github/workflows/ via the web UI to activate.
+
+name: Syscall Cave-Policy Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syscall-policy-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run cave-policy lint (report-only)
+        run: |
+          python3 scripts/audit_syscall_policy.py

@@ -1,0 +1,63 @@
+# SP-BLD-004 (2026-05-16) — SBOM publishing CI gate.
+#
+# On every push to main + on every v* tag:
+#   1. Regenerate the SBOM via scripts/gen_sbom.py
+#   2. Verify it parses + has expected component count (~50+)
+#   3. On tag: upload sbom.cdx.json + sbom-hash to the GitHub Release
+#
+# WHY THIS IS IN .github-workflows-pending/:
+#   Workflow files require the OAuth `workflows` scope which the
+#   autonomous Claude session does not hold. User copies this file to
+#   .github/workflows/ via the web UI to activate.
+#
+# After activation + first tag publishes a signed SBOM artifact,
+# REQ-BLD-004 promotes PARTIAL → HAVE in the gap doc.
+
+name: SBOM Publish
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate CycloneDX SBOM
+        run: |
+          python3 scripts/gen_sbom.py
+      - name: Validate SBOM parses + has expected components
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          with open("sbom.cdx.json") as f:
+              doc = json.load(f)
+          assert doc.get("bomFormat") == "CycloneDX", f"unexpected bomFormat: {doc.get('bomFormat')}"
+          assert doc.get("specVersion") in {"1.5", "1.4"}, f"unexpected specVersion: {doc.get('specVersion')}"
+          components = doc.get("components", [])
+          n = len(components)
+          if n < 40:
+              print(f"SBOM has only {n} components; expected >= 40 (Sphragis dependency count)", file=sys.stderr)
+              sys.exit(1)
+          print(f"[sbom-publish] OK — CycloneDX {doc.get('specVersion')} with {n} components")
+          PY
+      - name: Emit SBOM SHA-256
+        run: |
+          shasum -a 256 sbom.cdx.json > sbom.cdx.json.sha256
+          cat sbom.cdx.json.sha256
+      - name: Upload SBOM to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sbom.cdx.json
+            sbom.cdx.json.sha256
