@@ -73,6 +73,7 @@ pub enum Algo {
     // Public-key signatures
     RsaPkcs1Sha256,
     RsaPkcs1Sha384,
+    RsaPkcs1Sha512,
     RsaPssSha256,
     RsaPssSha384,
     EcdsaP256Sha256,
@@ -146,7 +147,7 @@ const fn reject_reason(algo: Algo) -> &'static str {
         Algo::Sha256 => "gov-strict: SHA-256 rejected for new signing; SHA-384/512 only",
         Algo::Sha3_256 | Algo::Blake2s | Algo::Blake3
             => "gov-strict: narrow hash rejected; SHA-384/512 only for signing",
-        Algo::RsaPkcs1Sha256 | Algo::RsaPkcs1Sha384 | Algo::RsaPssSha256 | Algo::RsaPssSha384
+        Algo::RsaPkcs1Sha256 | Algo::RsaPkcs1Sha384 | Algo::RsaPkcs1Sha512 | Algo::RsaPssSha256 | Algo::RsaPssSha384
             => "gov-strict: RSA signing rejected; ML-DSA-87 / LMS / XMSS only",
         Algo::EcdsaP256Sha256 | Algo::EcdsaP384Sha384
             => "gov-strict: ECDSA rejected; ML-DSA-87 / LMS / XMSS only",

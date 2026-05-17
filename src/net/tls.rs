@@ -536,6 +536,14 @@ pub fn process_server_hello(pcb_id: usize, data: &[u8]) -> Result<(), &'static s
             uart::puts("[tls] server selected unsupported cipher suite — abort\n");
             return Err("TLS: unsupported cipher suite");
         }
+        // SP-B1.6.1 (2026-05-16): policy gate. Under gov-strict
+        // (`cargo build --features gov-strict`), AES-128 is rejected
+        // — the only cipher we currently accept is AES-128-GCM-SHA256,
+        // so gov-strict TLS handshakes fail-closed here until a
+        // future SP plumbs AES-256-GCM-SHA384 end-to-end (key sched,
+        // HKDF-SHA-384, AEAD impl). Community build is unaffected
+        // (policy::ensure_permitted returns Ok for all algos).
+        crate::crypto::policy::ensure_permitted(crate::crypto::policy::Algo::Aes128Gcm)?;
         pos += 3; // cipher (2) + compression (1)
 
         // Extensions length
