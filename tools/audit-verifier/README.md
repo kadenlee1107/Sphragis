@@ -54,19 +54,28 @@ python3 tools/audit-verifier/audit_verifier.py \
     /path/to/audit.log
 ```
 
-## SP-AUD-004.1 (future) — binary-format export
+## SP-AUD-004.1 — binary-format export (LANDED 2026-05-16)
 
-The current text-format audit.log written by `audit-flush` drops two
-fields the HMAC chain covers: `cave_id` (2 bytes) and `mlen` (1 byte
-— used in canonical-byte format). Without those, the verifier can't
-reproduce the exact chain inputs.
+The text format written by `audit-flush` drops `cave_id` + `mlen`, which
+the HMAC chain covers. SP-AUD-004.1 adds a binary-format export
+preserving every field the chain consumed. With the binary export,
+cryptographic-mode verification recomputes the chain bit-exact.
 
-SP-AUD-004.1 will add a binary-format export path (`audit-flush --binary`
-or a separate `audit-export` command) that writes the entries in
-canonical-byte form so the verifier can recompute the chain bit-
-exact. The text format stays as the human-readable export.
+Sphragis side:
+- New shell command `audit-flush-binary` writes `/audit.bin` per the
+  `SPHRAGIS_AUDIT_BINARY_V1` format below.
+- `src/security/audit.rs` exports `BINARY_MAGIC`, `BINARY_HEADER_LEN`,
+  `serialize_binary(buf) -> bytes_written`, `flush_to_batfs_binary()`.
 
-The binary record layout:
+Verifier side (this tool):
+- `--binary` flag toggles binary-format parsing.
+- `--key-hex` + `--binary` together do FULL HMAC-SHA-384 chain
+  recomputation against the records (SP-C4.1 upgraded chain to SHA-384;
+  48-byte key, 56-byte seal).
+- `--seal-hex` + `--key-hex` + `--binary` adds seal verification:
+  recomputed chain head must match the operator-anchored seal.
+
+Binary record layout:
 
 ```
 record :=
@@ -78,9 +87,26 @@ record :=
   total:     12 + mlen bytes per record (variable-length)
 
 file header :=
-  magic:     b"SPHRAGIS_AUDIT_BINARY_V1\n"  (24 bytes)
+  magic:     b"SPHRAGIS_AUDIT_BINARY_V1"  (24 bytes — no trailing \n)
   count:     big-endian u64 (8 bytes) — number of records
   reserved:  big-endian u64 (8 bytes) — must be zero in V1
+```
+
+Example usage:
+```bash
+# Structural-only binary parse
+python3 audit_verifier.py --binary --summary /path/to/audit.bin
+
+# Full HMAC chain verification (operator has the audit key)
+python3 audit_verifier.py --binary \
+    --key-hex <96-hex-char SHA-384 audit key> \
+    /path/to/audit.bin
+
+# Plus seal verification
+python3 audit_verifier.py --binary \
+    --key-hex <96-hex-char key> \
+    --seal-hex <112-hex-char seal> \
+    /path/to/audit.bin
 ```
 
 ## SP-AUD-004.2 (future) — key release via TPI

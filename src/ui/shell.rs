@@ -395,6 +395,7 @@ fn execute_inner(cmd: &str) {
         "cxx" | "c++" => cmd_run_elf("cxx"),
         "audit" => cmd_audit(parts[1]),
         "audit-flush" => cmd_audit_flush(),
+        "audit-flush-binary" => cmd_audit_flush_binary(),
         "audit-chain" => cmd_audit_chain(),
         "dmesg" => cmd_dmesg(parts[1]),
         "sec-status" | "secstatus" => cmd_sec_status(),
@@ -7995,6 +7996,27 @@ fn cmd_audit_flush() {
         }
         Err(e) => {
             console::puts("  audit-flush: BatFS write failed: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
+}
+
+/// SP-AUD-004.1 (2026-05-16): binary-format audit export. Writes the
+/// resident audit ring to /audit.bin in the
+/// `SPHRAGIS_AUDIT_BINARY_V1` format that preserves cave_id + mlen,
+/// allowing `tools/audit-verifier/audit_verifier.py --binary` to
+/// recompute the HMAC chain bit-exact.
+fn cmd_audit_flush_binary() {
+    match crate::security::audit::flush_to_batfs_binary() {
+        Ok(0) => console::puts("  audit-flush-binary: nothing to write\n"),
+        Ok(n) => {
+            console::puts("  audit-flush-binary: wrote ");
+            crate::kernel::mm::print_num(n);
+            console::puts(" bytes to /audit.bin\n");
+        }
+        Err(e) => {
+            console::puts("  audit-flush-binary: BatFS write failed: ");
             console::puts(e);
             console::puts("\n");
         }
