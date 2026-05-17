@@ -15,16 +15,15 @@
 | Status | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
 | ✅ HAVE | **17** | 2 | 0 | **19** |
-| ⚠️ PARTIAL | **35** | 5 | 0 | **40** |
-| ❌ MISSING | **23** | 26 | 6 | **55** |
+| ⚠️ PARTIAL | **36** | 5 | 0 | **41** |
+| ❌ MISSING | **22** | 26 | 6 | **54** |
 | **Total** | 75 | 33 | 6 | **114** |
 
-**Headline (updated 2026-05-16 end of autonomous run batches 1-4):** 17% of requirements fully satisfied; 35% partially in place; 48% missing. **P0 fully-satisfied count: 5 → 17** (12 P0s closed across the autonomous run); **P0 partial count: 17 → 35** (18 additional P0s landed scaffolding or partial implementation). **The autonomous run advanced 30 P0 requirements out of MISSING state.** Remaining 23 P0 MISSING items split into 5 disjoint buckets the autonomous-decision rules say to skip:
-1. **Founder-required (7)**: PRC-001..007 (incorporate, SAM.gov, GSA MAS, SBIR, DARPA pitches, ACT 3 teaming, IWRP/C5)
-2. **Hardware-required (3)**: ATT-002 Caliptra integration, ATT-003 SEP attestation on M4, HW-002 x86_64 port
-3. **Multi-session engineering IMPL (7)**: ATT-006.IMPL, AUD-002 WORM (BatFS-integration scope), BLD-001.IMPL.B-E, BLD-005.IMPL, BLD-008.IMPL, VER-002 IPC info-flow proof, UX-001..004
-4. **External-engagement certs (3)**: CRT-001 FIPS L1 lab, CRT-004 STIG DISA submission, CRT-005 FedRAMP agency sponsorship
-5. **Large remaining documentation (3)**: DOC-001 operator runbook (~100pp), DOC-004 capability statement (founder-led), DOC-009 marketing site (founder-led)
+**Headline (updated 2026-05-16 final close-out, autonomous batches 1-4 + DOC-001 STARTER):** 17% of requirements fully satisfied; 36% partially in place; 47% missing. **P0 fully-satisfied count: 5 → 17** (12 P0s closed across the autonomous run); **P0 partial count: 17 → 36** (19 additional P0s landed scaffolding or partial implementation). **The autonomous run advanced 31 P0 requirements out of MISSING state.** Remaining 22 P0 MISSING items split into 4 disjoint buckets the autonomous-decision rules cannot advance:
+1. **Founder paperwork + branding (10)**: PRC-001..007 (incorporate, SAM.gov + CAGE + UEI, GSA MAS, ACT 3 teaming, IWRP/C5 consortium, SBIR Phase I submissions, DARPA pitches), CRT-007 BIS encryption filing, DOC-004 capability statement, DOC-009 marketing site. Each requires either paperwork-and-relationships OR founder-branding decisions.
+2. **Hardware-bound IMPL (3)**: ATT-002 Caliptra integration (needs Caliptra hardware to wire), ATT-003 SEP attestation on M4 (needs M4 hardware + sepOS API), HW-002 x86_64 port (needs physical x86_64 test machine).
+3. **Multi-session engineering IMPL (6)**: AUD-002 WORM export (BatFS integration scope), VER-002 IPC info-flow Verus proof (multi-week proof effort), UX-001 multi-app window manager, UX-002 installer ISO, UX-003 settings app, UX-004 multi-user accounts. Each is weeks of focused work.
+4. **External-engagement certs (3)**: CRT-001 FIPS 140-3 L1 (CMVP lab + 12-30mo queue), CRT-004 DoD STIG (DISA review), CRT-005 FedRAMP (sponsoring agency). All Sphragis-side prep is done (FIPS module boundary, threat model, NIST 800-53 matrix, security target, audit verifier, operator runbook all landed).
 
 **This is the expected shape.** The last 14 weeks have been *kernel security hardening*, not *productization*. The HAVE column reflects audit-closed isolation primitives. The MISSING column reflects the entire productization mountain (UX, installer, multi-hardware), the procurement on-ramp (incorporation, SAM.gov, SBIR, DARPA), and the certification engineering work (FIPS, STIG, CSfC, attestation).
 
