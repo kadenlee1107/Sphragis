@@ -65,7 +65,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | CRY-002 | P0 | ⚠️ PARTIAL | `ml-dsa = "0.1.0-rc.8"` present; parameter set unconfirmed — must use ML-DSA-87 |
 | CRY-003 | P0 | ❌ MISSING | No LMS / XMSS module. Required for CNSA 2.0 software signing. |
 | CRY-004 | P0 | ⚠️ PARTIAL | AES-256 ubiquitous; no policy gate rejecting AES-128 |
-| CRY-005 | P0 | ⚠️ PARTIAL | `sha384.rs` exists; **no `sha512.rs`**; SHA-256 still default in many call sites |
+| CRY-005 | P0 | ⚠️ PARTIAL | `sha384.rs` + `sha512.rs` both exist (SP-B1.5); SHA-256 still default in many call sites (gov-build policy enforcement is SP-B1.6) |
 | CRY-006 | P0 | ⚠️ PARTIAL | Week 3-4 Crypto-F7 closed for SHA-256 + AES-GCM + ChaCha20-Poly1305 KATs; **extend to ML-KEM, ML-DSA, SHA-384, SHA-512, LMS/XMSS, HMAC-SHA-384** |
 | CRY-007 | P0 | ❌ MISSING | No documented FIPS-140-3 cryptographic-module boundary |
 | CRY-008 | P1 | ❌ MISSING | No lab engagement yet |
