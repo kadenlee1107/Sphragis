@@ -100,15 +100,13 @@ pub fn run_self_tests() -> Result<(), &'static str> {
     // PQ signature at category 5. Covers REQ-CRY-002.
     pq_cnsa::kat_mldsa87()?;
 
-    // NOTE: LMS (RFC 8554) KAT is NOT in this boot path. H5 keygen
-    // walks all 32 OTS leaves at generation time, ~270K SHA-256
-    // hashes total — ~30-60s under QEMU emulation without SHA-NI,
-    // which times out the smoke harness. `crypto::lms::kat()` is
-    // exposed for on-demand validation (e.g., via a shell command
-    // or a dedicated self-test script). The algorithm correctness
-    // is still gated — just not at every boot. SP-B1.7 may revisit
-    // this with a verify-only RFC 8554 §F test vector that doesn't
-    // require keygen.
+    // LMS RFC 8554 §F.1 verify-only KAT (SP-B1.3.1). Validates the
+    // hbs-lms verify path against the canonical RFC test vector +
+    // runs a tamper-detect (bit-flipped message must be rejected).
+    // Verify-only sidesteps the H10/H5 keygen latency that made
+    // kat() unsuitable for boot (~30-60s under QEMU emulation).
+    // Full-cycle kat() remains on-demand via `lms-kat` shell command.
+    lms::kat_verify_only()?;
 
     // ChaCha20-Poly1305 — encrypt-then-decrypt round trip + tamper
     // detection on a fixed (key, nonce, ad, pt). Catches codegen

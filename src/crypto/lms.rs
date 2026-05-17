@@ -57,6 +57,16 @@ use hbs_lms::{
 
 use crate::crypto::rng;
 
+/// RFC 8554 §F.1 — LMS / HSS test case 1 reference vectors. Provenance:
+/// `hbs-lms-0.1.1/tests/rfc_testcase1.rs` (Fraunhofer-AISEC; Apache-2.0).
+/// HSS L=2 over LMS_SHA256_M32_H5 / LMOTS_W=4 — sealed pre-existing
+/// (pubkey, msg, sig) triple. Verify-only; Sphragis NEVER generates from
+/// these (would consume OTS leaves from a shared key).
+#[allow(dead_code)]
+mod rfc8554_tc1 {
+    include!("lms_rfc8554_tc1_vectors.rs");
+}
+
 /// Hasher used for all LMS operations on Sphragis. SHA-256 with
 /// 256-bit output — NIST SP 800-208 §4.2 LMS_SHA256_M32 parameter.
 pub type Hasher = Sha256_256;
@@ -130,6 +140,47 @@ pub fn verify_default(verifying_key_bytes: &[u8], msg: &[u8], signature_bytes: &
 }
 
 // ── Boot-time KAT (SP-B1.5 / SP-B1.7 partial; REQ-CRY-003) ───────
+
+/// Boot-time verify-only KAT (SP-B1.3.1). Runs the RFC 8554 §F.1
+/// test case 1 verification — pre-existing (pubkey, message,
+/// signature) triple validated by every other RFC 8554 conformant
+/// implementation. Verify-only path is FAST (~ms even under QEMU
+/// emulation), so unlike `kat()` (which keygen+signs and takes
+/// 30-60s under emulation), this one IS wired into
+/// `crypto::run_self_tests()` at boot. Any divergence panics the
+/// kernel per the established fail-closed self-test pattern
+/// (audit CRYPTO-F7).
+///
+/// Also runs a tamper-detect: bit-flip the message and confirm
+/// verify rejects. Catches the class of "verify always returns ok"
+/// bugs that the positive vector alone wouldn't catch.
+pub fn kat_verify_only() -> Result<(), &'static str> {
+    use hbs_lms::Sha256_256 as H;
+    extern crate alloc;
+    use alloc::vec::Vec;
+
+    // Positive — the canonical RFC 8554 §F.1 vector. Must pass.
+    if verify::<H>(
+        rfc8554_tc1::RFC8554_TC1_MESSAGE,
+        rfc8554_tc1::RFC8554_TC1_SIGNATURE,
+        rfc8554_tc1::RFC8554_TC1_PUBLIC_KEY,
+    ).is_err() {
+        return Err("KAT-FAIL: LMS RFC 8554 §F.1 vector rejected (impl broken)");
+    }
+
+    // Tamper-detect — flip the first byte of the message. Must reject.
+    let mut bad_msg: Vec<u8> = rfc8554_tc1::RFC8554_TC1_MESSAGE.to_vec();
+    bad_msg[0] ^= 0x01;
+    if verify::<H>(
+        &bad_msg,
+        rfc8554_tc1::RFC8554_TC1_SIGNATURE,
+        rfc8554_tc1::RFC8554_TC1_PUBLIC_KEY,
+    ).is_ok() {
+        return Err("KAT-FAIL: LMS accepted tampered RFC 8554 message");
+    }
+
+    Ok(())
+}
 
 /// Round-trip + tamper-detect KAT. Generate a fresh key, sign a
 /// fixed test vector, verify, then bit-flip the message and assert
