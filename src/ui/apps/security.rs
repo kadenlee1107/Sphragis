@@ -154,7 +154,11 @@ fn paint_audit_block(rect: WindowRect) {
     // Build display entries by pulling the last 32 audit entries (oldest..newest)
     // and iterating in reverse for newest-first display.
     let mut tmp: [audit::Entry; 32] = [audit::Entry::empty(); 32];
-    let n = audit::recent(&mut tmp);
+    // SP-ISO-009.1 (2026-05-16): use the cap-aware wrapper. A cave
+    // without `audit:read-all` sees only its own entries; the
+    // privileged UX (when invoked from kernel context per
+    // cave::get_active() == usize::MAX) still gets the full ring.
+    let n = audit::recent_for_caller(&mut tmp);
     let viewport = viewport_start();
     let mut entries: Vec<(String, String, String)> = Vec::new();
     for (row_index, i) in (0..n).rev().enumerate() {

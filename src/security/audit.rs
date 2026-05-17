@@ -218,6 +218,35 @@ pub fn recent(buf: &mut [Entry]) -> usize {
     take
 }
 
+/// SP-ISO-009.1 (2026-05-16): callable wrapper that consults the
+/// ACTIVE cave's capability set. If the active cave holds the
+/// `audit:read-all` capability OR is the kernel context (cave_id
+/// == usize::MAX), returns full-ring `recent`. Otherwise returns
+/// cave-scoped `recent_for_cave(own_cave_id, buf)`.
+///
+/// Intended for UI / shell command callers that want the cave-
+/// safe default behavior. Privileged callers (e.g. forensic
+/// console code that needs the full ring regardless of caller
+/// cave) continue to call `recent` directly.
+pub fn recent_for_caller(buf: &mut [Entry]) -> usize {
+    use crate::caves::cave;
+    let cave_id = cave::get_active();
+    if cave_id == usize::MAX {
+        // Kernel context — no cave active. Trust caller; return full ring.
+        return recent(buf);
+    }
+    if cave_id < cave::MAX_CAVES {
+        let cave_ref = unsafe { &cave::CAVES[cave_id] };
+        if cave_ref.has_cap("audit:read-all") {
+            return recent(buf);
+        }
+        let cid = (cave_id as u16) & 0x7FFF;
+        return recent_for_cave(cid, buf);
+    }
+    // Out-of-range cave_id (shouldn't happen). Return nothing.
+    0
+}
+
 /// Cave-scoped read (SP-ISO-009 / REQ-ISO-009 / REQ-AUD-006). Like
 /// `recent` but filters to entries whose recorded `cave_id` matches
 /// `cave_id_filter`. Use this when a non-privileged cave (one
