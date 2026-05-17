@@ -406,6 +406,7 @@ fn execute_inner(cmd: &str) {
         // anti-feature ANTI-002).
         "lms-kat" => cmd_lms_kat(),
         "attest-smoke" => cmd_attest_smoke(),
+        "attest-dump"  => cmd_attest_dump(),
         "tcp-selftest" => cmd_tcp_selftest(),
         "tcp-listen" => cmd_tcp_listen(parts[1]),
         "tcp-list" => cmd_tcp_list(),
@@ -10959,6 +10960,37 @@ fn cmd_attest_smoke() {
             console::puts(e);
             console::puts("\n");
         }
+    }
+}
+
+/// SP-ATT-001 (2026-05-16): produce a Quote for the active cave and
+/// dump the wire-format bytes to BatFS at `attest-quote.bin`. The
+/// external verifier (`tools/attest-verifier/attest_verifier.py`)
+/// reads this file, parses the wire format, structurally validates
+/// fields, and (if pqcrypto-mldsa is installed) cryptographically
+/// verifies the ML-DSA-87 signature.
+fn cmd_attest_dump() {
+    use crate::security::attest::{quote_for_cave, Claims, NONCE_LEN};
+    let nonce = [0u8; NONCE_LEN]; // deterministic nonce for dump path
+    let claims = match Claims::from_bytes(b"shell-dumped-quote") {
+        Ok(c) => c,
+        Err(e) => { console::puts("  attest-dump: claims build failed: "); console::puts(e); console::puts("\n"); return; }
+    };
+    // Cave id 0 is the kernel-context cave for dump tests; the verifier
+    // only needs structural correctness + sig validity, not a particular
+    // cave identity.
+    let q = match quote_for_cave(0, &nonce, claims) {
+        Ok(q) => q,
+        Err(e) => { console::puts("  attest-dump: quote failed: "); console::puts(e); console::puts("\n"); return; }
+    };
+    let wire = q.to_wire();
+    match crate::fs::batfs::create("attest-quote.bin", &wire) {
+        Ok(()) => {
+            console::puts("  attest-dump: wrote attest-quote.bin (");
+            print_num(wire.len());
+            console::puts(" bytes)\n");
+        }
+        Err(e) => { console::puts("  attest-dump: batfs create failed: "); console::puts(e); console::puts("\n"); }
     }
 }
 
