@@ -1,0 +1,64 @@
+# SP-BLD-003 (2026-05-16) — in-toto v1 attestation publishing.
+#
+# On every v* tag:
+#   1. Build the release kernel
+#   2. Run scripts/build_intoto_attestation.py to generate
+#      a v1 in-toto attestation jsonl (which builder, which command,
+#      which source commit, which artifact SHA-256)
+#   3. Upload the .intoto.jsonl + .sha256 to the GitHub Release
+#
+# Together with sigstore release-signing (SP-BLD-005) and SBOM
+# publishing (SP-BLD-004), this is the SLSA L3 -> L4 chain
+# (release-sign attests "who", in-toto attests "how", SBOM attests
+# "what").
+#
+# WHY THIS IS IN .github-workflows-pending/:
+#   Workflow files require the OAuth `workflows` scope which the
+#   autonomous Claude session does not hold. User copies this file
+#   to .github/workflows/ via the web UI to activate.
+#
+# After activation + first tag publishes an in-toto attestation,
+# REQ-BLD-003 promotes PARTIAL → HAVE in the gap doc.
+
+name: in-toto Attestation Publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  intoto-attest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-unknown-none
+          components: rust-src
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release kernel
+        run: |
+          cargo build --release --target aarch64-unknown-none
+      - name: Generate in-toto attestation
+        run: |
+          mkdir -p out
+          python3 scripts/build_intoto_attestation.py \
+              --artifact target/aarch64-unknown-none/release/sphragis \
+              --output out/sphragis.intoto.jsonl
+      - name: Emit attestation SHA-256
+        run: |
+          shasum -a 256 out/sphragis.intoto.jsonl > out/sphragis.intoto.jsonl.sha256
+          cat out/sphragis.intoto.jsonl.sha256
+      - name: Upload in-toto attestation to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/sphragis.intoto.jsonl
+            out/sphragis.intoto.jsonl.sha256
