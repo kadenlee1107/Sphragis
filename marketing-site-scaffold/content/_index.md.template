@@ -1,0 +1,34 @@
+---
+title: "{COMPANY_NAME}"
+---
+
+# Sphragis
+
+A **sovereign-grade attested-cave OS for the post-quantum, capability-hardware era**.
+
+Sphragis is a security-first bare-metal Rust microkernel for government and high-assurance use. Built to be procurable in the 2027-2030 procurement world — not retrofitted to it.
+
+## Five differentiators
+
+1. **Rust microkernel + information-flow proofs.** Memory-safe by language. Non-interference proofs on the capability and IPC subsystems via Verus — non-functional-correctness, complementary to seL4's full-correctness story.
+2. **CNSA-2.0-native, PQC-only crypto.** ML-KEM-1024, ML-DSA-87, AES-256, SHA-384 by default in the gov build. No classical fallback. Auto-clears the NSA Jan 2027 deadline for new National Security System acquisitions.
+3. **Attestation as a first-class kernel primitive.** Every cave is an attestable identity, rooted in Caliptra / Apple SEP / TPM 2.0 hardware roots, with HSM-backed operator-CA endorsement chain.
+4. **Reproducible, bootstrappable, SLSA-L4 build chain.** Bit-for-bit reproducible from source, sigstore-signed, in-toto-attested, Rekor transparency log.
+5. **CHERI-ready architecture.** Caves map 1:1 to CHERI compartments. CHERIoT-Ibex embedded variant ships in 2026-27.
+
+See [anti-features](https://github.com/{GITHUB_OWNER}/Sphragis/blob/main/ANTI_FEATURES.md) for explicit non-goals.
+
+## What's it for?
+
+Sphragis is for environments where you can name the threat model:
+- Confidential computing for AI inference (run customer prompts where the cloud provider can prove they can't read them)
+- Defense contractor mission-system OS
+- Government analyst workstation
+- Embedded high-assurance (avionics, automotive, industrial control)
+- Cross-domain solutions hosting
+
+## Status
+
+Active development. Booting on Apple M4 hardware ([boot evidence]({COMPANY_DOMAIN}/photos/m4-boot/)) + QEMU CI. 14 weeks of mechanical-trace security audit closure (14 criticals + 17 highs + 23 mediums + 3 elite-tier wins). 24 productization sub-projects executed across a documented 36-month master plan. Roadmap toward FIPS 140-3 + DoD STIG + NSA CSfC component listing in flight.
+
+[Source on GitHub](https://github.com/{GITHUB_OWNER}/Sphragis) · [Latest release](https://github.com/{GITHUB_OWNER}/Sphragis/releases) · [Capability statement (PDF)]({COMPANY_DOMAIN}/capability-statement.pdf) · [Contact]({COMPANY_DOMAIN}/contact/)
