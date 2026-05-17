@@ -180,7 +180,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 | REQ | P | Status | Notes |
 |---|---|---|---|
 | DOC-001 | P0 | ❌ MISSING | No operator runbook |
-| DOC-002 | P0 | ⚠️ PARTIAL | `DESIGN_TLS_HARDENING.md`, `DESIGN_CAVES.md`, etc. cover slices; no consolidated formal threat model |
+| DOC-002 | P0 | ✅ HAVE | `docs/THREAT_MODEL.md` published (SP-DOC-002). 8 sections: assets (CSP/data/policy), 8 adversary capabilities (A1-A8), 10 attack surfaces (S1-S10) mapped to source-code regions, mitigations matrix (S×A), 7 residual risks with bounded scope + closure plans, 16-layer defense-in-depth summary. Consolidates the per-subsystem DESIGN_*.md threat-model fragments into AO-reviewable form. |
 | DOC-003 | P0 | ⚠️ PARTIAL | DESIGN docs exist (developer-facing); no AO-audience-formatted architecture doc |
 | DOC-004 | P0 | ❌ MISSING | No capability statement |
 | DOC-005 | P0 | ❌ MISSING | No Security Target |
