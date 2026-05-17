@@ -143,7 +143,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| CHR-001 | P0 | ❌ MISSING | No cave-to-CHERI-compartment mapping doc |
+| CHR-001 | P0 | ✅ HAVE | `DESIGN_CHERI_MAPPING.md` published (SP-CHR-001). Maps every Sphragis cave-isolation primitive (per-cave L1, ASIDs, IPC, shm, audit, attestation) to its CHERI realization (sealed capabilities, compartment identity, capability monotonicity). Covers Morello (SP-CHR-002) + CHERIoT-Ibex (SP-CHR-003) targets with timing. |
 | CHR-002 | P1 | ❌ MISSING | No CHERI build target |
 | CHR-003 | P1 | ❌ MISSING | No CHERIoT-Ibex boot |
 | CHR-004 | P2 | ❌ MISSING | Tracks FreeBSD 16.0 timeline |
