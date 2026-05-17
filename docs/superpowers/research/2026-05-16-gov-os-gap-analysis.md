@@ -130,7 +130,7 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| VER-001 | P0 | ❌ MISSING | No Verus or Kani setup |
+| VER-001 | P0 | ⚠️ PARTIAL | `verification/` directory + Verus smoke proof scaffolded (SP-C2.1). README documents operator-local install path; smoke.rs proves two trivial theorems to confirm tool plumbing. Capability-dispatcher non-interference proof is SP-C2.2 (multi-session). |
 | VER-002 | P0 | ❌ MISSING | No IPC info-flow proof |
 | VER-003 | P1 | ❌ MISSING | No scheduler invariants formalized |
 | VER-004 | P1 | ❌ MISSING | No Kani model-check on pointer arithmetic |
