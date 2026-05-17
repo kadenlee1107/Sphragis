@@ -62,15 +62,15 @@ What's *strategically blocking* (P0 missing items that gate everything else):
 |---|---|---|---|
 | LIC-001 | P0 | ✅ HAVE | `Cargo.toml: license = "Apache-2.0"` per SP-A1 (commit `5f3550bd`). `LICENSE` file holds canonical Apache-2.0 text + copyright. `NOTICE` file present. `LICENSE-COMMERCIAL.md` deleted. |
 | LIC-002 | P0 | ✅ HAVE | `CONTRIBUTING.md` documents DCO sign-off requirement (per SP-A1). Every Sphragis commit uses `git commit -s`. No CLA — DCO is the lighter alternative used by Linux kernel + most modern OSS infra. |
-| LIC-003 | P0 | ⚠️ PARTIAL | Project policy avoids GPL deps (per memory `feedback_license_posture.md`); no automated `cargo-deny` enforcement |
+| LIC-003 | P0 | ✅ HAVE | `deny.toml` + `.github/workflows/license-check.yml` (`cargo deny check` + `cargo audit` on every push + PR to main). cargo-deny v2 schema; allow-list of Apache-2.0/MIT/BSD/ISC/Zlib/Unicode/CC0/MPL-2.0; GPL/AGPL deny-by-omission. RUSTSEC-2023-0071 ignored with justification (no RSA usage in attack-reachable path). |
 | LIC-004 | P1 | ❌ MISSING | Trademark not filed |
 
 ## §3. Crypto (CRY)
 
 | REQ | P | Status | Notes |
 |---|---|---|---|
-| CRY-001 | P0 | ⚠️ PARTIAL | `ml-kem = "0.2"` crate present; **parameter set unconfirmed** — likely ML-KEM-768 default, must verify and switch to ML-KEM-1024 |
-| CRY-002 | P0 | ⚠️ PARTIAL | `ml-dsa = "0.1.0-rc.8"` present; parameter set unconfirmed — must use ML-DSA-87 |
+| CRY-001 | P0 | ✅ HAVE | `src/crypto/pq_cnsa.rs` exposes **ML-KEM-1024** (FIPS 203, CNSA 2.0 cat-5) via `ml_kem::MlKem1024`. Gov-strict policy gate (`src/crypto/policy.rs:119`) permits `MlKem1024` and rejects `MlKem768`. `X25519MlKem768` retained as the IETF-standardized TLS hybrid for interop (IETF codepoint 0x11EC), permitted in gov-strict TLS path only — there is no standardized X25519MlKem1024 codepoint to switch to today. Documented in `pq_cnsa.rs` module header. |
+| CRY-002 | P0 | ✅ HAVE | `src/crypto/pq_cnsa.rs` exposes **ML-DSA-87** (FIPS 204, CNSA 2.0 cat-5) via `ml_dsa::MlDsa87`. Gov-strict policy gate (`src/crypto/policy.rs:117`) permits `MlDsa87` and rejects `MlDsa65` (cat-3) with explicit `"gov-strict: ML-DSA-65 (category 3) rejected; ML-DSA-87 (category 5) only"`. Attestation Quote signature is ML-DSA-87 (SP-C1.1). |
 | CRY-003 | P0 | ⚠️ PARTIAL | LMS landed in `src/crypto/lms.rs` (SP-B1.3) via `hbs-lms` crate; full-cycle keygen+sign+verify KAT exposed as `lms-kat` shell command (too slow for boot-smoke). **SP-B1.3.1 added verify-only boot KAT using RFC 8554 §F.1 vectors** (sealed pre-existing pubkey+msg+sig from `lms_rfc8554_tc1_vectors.rs`) — runs at every boot in `crypto::run_self_tests` + tamper-detect (bit-flipped message must reject). Per NIST SP 800-208 §4 either LMS OR XMSS satisfies the standard. XMSS still missing (SP-B1.4 blocked on upstream `xmss` crate not no_std-clean). |
 | CRY-004 | P0 | ✅ HAVE | AES-256 ubiquitous; policy gate via `gov-strict` (SP-B1.6); sweeps wired through every AEAD + signature call site: TLS ServerHello cipher (`src/net/tls.rs:539`, SP-B1.6.1), X.509 sigalg (`src/net/x509.rs:907`, SP-B1.6.1), cave secure-channel ChaCha20-Poly1305 seal+open (`src/caves/secure_channel.rs`, SP-B1.6.2), MLS IPC send+recv ChaCha20-Poly1305 (`src/caves/mls_ipc.rs`, new `MlsIpcError::PolicyRejected` variant, SP-B1.6.2), BatFS create AES-256-GCM-SIV gate (`src/fs/batfs.rs:949`, SP-B1.6.2 — for-the-record assertion; gov-eligible so always succeeds). Both builds compile clean; gov-strict TLS + MLS IPC fail-closed at first weak-algo. |
 | CRY-005 | P0 | ⚠️ PARTIAL | `sha384.rs` + `sha512.rs` both exist (SP-B1.5); SHA-256 still default in many call sites (gov-build policy enforcement is SP-B1.6) |
