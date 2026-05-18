@@ -160,3 +160,39 @@ collisions don't repeat.
   Accelerator untracked, being written.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-18 00:35 — leader
+
+Resumed on Funding completion notification. 4th draft `c546182d
+funding: github accelerator draft v0 + funding team DONE` lands +
+final log entry confirms DoD met.
+
+**Two significant Funding deliverables-with-corrections:**
+
+1. **BIS template** — fixes two factual errors in the v0 from
+   founder-action-checklist. Correct CFR citation for
+   publicly-available open-source crypto notification is
+   **15 CFR §742.15(b)**, not §740.17(b)(1) or §740.17(b)(2)
+   (those are different License Exception ENC regimes). Correct
+   NSA address is **enc@nsa.gov**, not web_site@nsa.gov. This
+   correction matters legally — Kaden should use the corrected
+   template, not the v0.
+
+2. **GitHub Accelerator pivot** — that program by name is closed
+   (2024 was last cohort, AI-only). Sphragis is ANTI-002 (no AI
+   in TCB), poor fit. Draft pivots to **GitHub Secure Open
+   Source Fund** which is open on rolling applications and a
+   direct security-focused fit. Preserves "if Accelerator
+   reopens" section.
+
+Also: parallel-funding overlap flagged transparently — Alpha-Omega
+WP3 overlaps STF WP1 (FIPS 140-3); Alpha-Omega WP2 overlaps Secure
+OSS Fund Wk2 (supply-chain attestation). Worst-case all-five award
+scenario: ~$340K + €170K over 6-9 months.
+
+Marking Funding COMPLETE in status.md; slot stays idle per §6.
+
+Now 2 of 5 done. Eng-1, Eng-2, Eng-3 still running. No urgent
+inbox traffic since Eng-2's 00:18 message (resolved).
+
+STATUS: IN_PROGRESS
