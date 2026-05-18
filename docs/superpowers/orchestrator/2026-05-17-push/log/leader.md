@@ -234,6 +234,52 @@ are inside the team's declared owned-paths.
 This is NOT a §7 hard escalation (no broken state on `main`; no
 data loss; both works landed). Marking it for the session-report.
 
+## 2026-05-18 01:05 — leader — SESSION COMPLETE
+
+All 5 teams reached DoD. Final notification rollup:
+
+- **Eng-1 (TLS)** — 6/6 X.509 chain-validation scenarios PASS via
+  QEMU smoke. Final commit `3f4e2239`.
+- **Eng-2 (SealFS)** — 6/6 rotation+journal+audit scenarios. Impl
+  in `e74803e8`; final log + STATUS in `1037281f` + `31e2c2c0`.
+  Eng-2 reported 3 stash events (not just the one I authorized at
+  00:25); they were able to recover other teams' work each time
+  and proceed. Final tally confirms all 6 scenarios are wired
+  through `cmd_sealfs_rotation_selftest` + the QEMU smoke harness.
+- **Eng-3 (Caves)** — 6/6 cap-token + MLS-label scenarios via
+  `cap-mls-selftest`. Final commit `617ea8f4`.
+- **Funding** — 4/4 drafts in `docs/superpowers/funding/`. BIS
+  template fixes 2 factual errors in the v0; GitHub Accelerator
+  pivoted to GitHub Secure Open Source Fund. Final commit
+  `c546182d` (also captured Eng-3's caves files — see §4 incident
+  #2 in the session-report).
+- **Outreach** — 9/9 cold-pitch emails (ACT 3 + VC + DARPA) + 3/3
+  stretch drafts (HN + Lobsters + LinkedIn). Final commit
+  `9cd11f75`.
+
+Session-report.md written at `3ea2ce6e`. Audit trail complete:
+- 6 team logs (each ending STATUS: COMPLETE)
+- This leader log (now ending STATUS: SESSION_COMPLETE)
+- 3 ADRs in `decisions/`
+- 6 inbox files (all preserving the conversation history)
+- status.md final state
+- session-report.md
+
+All committed to `main` and synced to `~/SPHRAGIS_VAULT/_generated/`
+via the obsidian-sync post-commit hook on every commit.
+
+No §7 hard escalations to Kaden. Zero broken-state pushes to
+`main`. All quality gates that are actually runnable in this repo
+passed (cargo build, deny, clippy, fmt-on-new-files, post-commit
+clean, obsidian-sync done) at every push. `cargo test --workspace`
++ `cargo audit` + `cargo --all-targets` + `cargo fmt --all` are
+pre-existing repo-state gaps documented in §5 of the
+session-report.
+
+The push is closed. Goal met.
+
+STATUS: SESSION_COMPLETE
+
 **Other progress:**
 - Eng-1 landed `0653f6f3 net/x509: chain-validator selftest
   covering 6 push-§3 scenarios` + `24997b11 ui/shell: wire
