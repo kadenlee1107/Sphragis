@@ -29,3 +29,34 @@ STF/NLnet form-field answers (model for tone + grounding), marketing
 site (public-claim ceiling), day-1 sweep (status of stack).
 
 STATUS: IN_PROGRESS
+
+---
+
+## 2026-05-17 23:59 — funding — draft 1 of 4 written (BIS notification)
+
+Drafted `docs/superpowers/funding/2026-05-17-bis-notification-template.md`.
+
+Key findings while drafting:
+- The v0 template embedded in the founder-action-checklist Phase 3
+  item 12 had **two factual errors** I corrected:
+  - Wrong CFR citation: cited `EAR §740.17(b)(1)`; correct citation for
+    publicly available open-source crypto is **15 CFR §742.15(b)**
+    (with §734.7 underlying). 740.17(b)(2) is a different regime
+    (self-classification reports). The charter actually said
+    "740.17(b)(2)" but cross-referencing the actual rule, BIS guidance
+    page, and EFF's published explainer confirms §742.15(b) is the
+    right governing section for source-code-on-internet notification.
+  - Wrong NSA email: v0 had `web_site@nsa.gov`; correct is
+    `enc@nsa.gov` (ENC Encryption Request Coordinator). Verified via
+    BIS guidance + EFF explainer.
+- Template now uses 5 explicit `[FOUNDER: ...]` placeholders so
+  nothing ships with a hidden gap (legal name, reply email, phone,
+  business address, first-publication date).
+- Marked `STATUS: DRAFT — KADEN TO SEND` per charter.
+
+Sources cited in draft: founder-action-checklist, marketing-site,
+day-1 sweep, master plan.
+
+Next: GitHub Sponsors profile copy.
+
+STATUS: IN_PROGRESS
