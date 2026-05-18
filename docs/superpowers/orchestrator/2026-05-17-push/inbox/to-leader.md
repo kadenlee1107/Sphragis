@@ -21,3 +21,42 @@ To make forward progress without touching Eng-3's source, I will:
 
 Tagging this NORMAL not URGENT because Eng-3's commits are still flowing and they're presumably going to land their full change in a clean state shortly. If you've already noticed and have a different plan, override me.
 
+## 2026-05-18 00:35 — from eng-2
+
+NORMAL: STATUS COMPLETE.
+
+DoD met. All 6 §3 (Eng-2) TDD scenarios wired:
+1. rotation_old_data_still_decryptable
+2. rotation_new_data_uses_new_key
+3. journal_recovery_after_partial_write
+4. audit_log_records_mount
+5. audit_log_records_rotation
+6. audit_log_append_only
+
+Code landed in commit `e74803e8` (you accidentally captured my staged files into your "Eng-3 COMPLETE" commit at 00:29 — git diff verifies the Eng-2 work is there; see `git show --stat e74803e8` for the file list. No data lost, but the commit message describes Eng-3 only). My follow-up commit `1037281f` updated `log/eng-2-sealfs.md` with `STATUS: COMPLETE`.
+
+Files in e74803e8 attributable to Eng-2:
+- /Users/kadenlee/Sphragis/src/fs/sealfs_rotation.rs (NEW, 327 lines)
+- /Users/kadenlee/Sphragis/src/fs/sealfs_journal.rs (NEW, 440 lines)
+- /Users/kadenlee/Sphragis/src/fs/sealfs_audit.rs (NEW, 356 lines)
+- /Users/kadenlee/Sphragis/scripts/qemu_sealfs_rotation_selftest.py (NEW, 169 lines)
+- /Users/kadenlee/Sphragis/src/fs/mod.rs (+5)
+- /Users/kadenlee/Sphragis/src/fs/sealfs.rs (+169 net)
+- /Users/kadenlee/Sphragis/src/main.rs (+10 boot hook)
+- /Users/kadenlee/Sphragis/src/ui/shell.rs (+167 selftest)
+- /Users/kadenlee/Sphragis/src/ui/shell_completion.rs (+2)
+
+Gates passing on e74803e8:
+- `cargo build --release --target aarch64-unknown-none` green
+- `cargo build --release --target aarch64-unknown-none --features selftest-on-boot` green
+- `cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings` green
+- `cargo deny check` green
+- `rustfmt --check src/fs/sealfs_rotation.rs src/fs/sealfs_journal.rs src/fs/sealfs_audit.rs` green
+
+Stash hygiene: two stale stashes are dangling. Recommend you drop them after eyeballing — they are Eng-1+Eng-3's pre-commit chaos already superseded by their clean commits:
+- stash@{0}: On main: shell-rs-other-teams-wip
+- stash@{1}: On cleanup/warnings: rebase prep (older)
+
+For the session report: cross-team WIP-in-shared-files broke my gate three times. The mechanism that fixed it was leader-authorized `git stash` of other teams' uncommitted hunks. That pattern works but is fragile because other agents' stash/pop cycles competed with mine. Future sessions might want a stricter "no editing shared dispatch files until you're ready to commit" discipline, or a per-team locked file convention.
+
+Exiting now. STATUS: COMPLETE.
