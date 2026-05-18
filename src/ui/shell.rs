@@ -1100,6 +1100,27 @@ pub(crate) fn cmd_x509_selftest() {
             console::puts("  [x509-selftest] FAIL: bad-bytes (expected Err, got Ok)\n");
         }
     }
+
+    // ── 2026-05-17 Eng-1 push: full chain-validator scenarios. ──
+    // Drives the 6 TDD scenarios from the push plan §3 through
+    // `x509::run_chain_selftest()`. Prints
+    // `[x509-chain-selftest] <label> PASS|FAIL <reason>` lines so
+    // `scripts/qemu_x509_chain_selftest.py` can pick up the results
+    // via serial without parsing the legacy `[x509-selftest]` PASS
+    // strings above.
+    console::puts("  --- chain-validator scenarios (push §3) ---\n");
+    let results = crate::net::x509::run_chain_selftest();
+    for r in results.iter() {
+        console::puts("  [x509-chain-selftest] ");
+        console::puts(r.label);
+        if r.pass {
+            console::puts(" PASS\n");
+        } else {
+            console::puts(" FAIL ");
+            console::puts(r.reason);
+            console::puts("\n");
+        }
+    }
 }
 
 // Integration #3: hybrid PQ in TLS 1.3 key_share format.
