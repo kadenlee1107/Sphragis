@@ -53,3 +53,32 @@ spawn**. Test team deleted via `TeamDelete` cleanly.
 Outreach) in priority order, each with full charter prompt.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-17 23:55 — leader
+
+§9.7 partial pivot. First `TeamCreate(eng-1-tls)` succeeded; the next
+four (eng-2-sealfs, eng-3-caves, funding, outreach) all failed with
+`Already leading team "eng-1-tls". A leader can only manage one team
+at a time.` The actual TeamCreate ceiling is **1**, not 4-5 as the
+plan anticipated.
+
+Decision recorded in `decisions/0003-team-ceiling.md`: pivot to
+parallel subagent model. Each team becomes a single `Agent{
+subagent_type=general-purpose, run_in_background=true, prompt=<full
+charter>}` call. Five Agent calls fired in one parallel message block.
+ADR-0001 superseded for execution-model purposes only; vault-mediated
+coordination unchanged.
+
+Also recorded `decisions/0002-path-corrections.md` earlier for two
+plan-vs-tree mismatches (src/net/tls/ doesn't exist; funding day-1
+sweep is under docs/superpowers/research/ not /funding/).
+
+Two ALSO-mismatches caught in pre-spawn skim: src/net/x509.rs already
+exists (per day-1 sweep "X.509 chain validation HAVE") — Eng-1's
+mission becomes verify-and-regression-test rather than build-from-zero.
+That's encoded in the spawn prompt.
+
+eng-1-tls test-team deleted to free the leader from team-leadership.
+Spawning all 5 subagents now.
+
+STATUS: IN_PROGRESS
