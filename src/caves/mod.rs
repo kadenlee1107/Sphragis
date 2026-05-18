@@ -1,11 +1,13 @@
 pub mod kits;
 pub mod bridge;
+pub mod cap_token;
 pub mod cave;
 pub mod cave_private;
 pub mod docker_client;
 pub mod ipc_session;
 pub mod linux;
 pub mod mls_ipc;
+pub mod mls_label;
 pub mod persist;
 pub mod pq_comms_session;
 pub mod secure_channel;
