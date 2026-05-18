@@ -313,6 +313,29 @@ pub fn init(master_key: &[u8; 32]) {
         }
     }
 
+    // 2026-05-17 Eng-2: rotation/journal/audit state is per-boot
+    // RAM. Initialise to a fresh shape. `wipe_master_key` calls
+    // `reset()` on each symmetrically so a re-init starts clean.
+    super::sealfs_rotation::reset();
+    super::sealfs_journal::reset();
+    super::sealfs_audit::reset();
+
+    // Drive journal recovery BEFORE init_disk so any in-flight
+    // intents from a prior crashed mount are rolled back before
+    // we start restoring FILES[] from disk. The selftest seam in
+    // `sealfs_journal` lets us drive this path under controlled
+    // conditions; at boot this is a no-op because nothing pushed
+    // to the journal between reset() above and here.
+    let rolled_back = super::sealfs_journal::replay_on_mount();
+    if rolled_back > 0 {
+        let _ = super::sealfs_audit::on_journal_replay(rolled_back);
+    }
+
+    // Record the mount event so scenario #4 of the
+    // sealfs-rotation-selftest can verify it. `current_generation()`
+    // is 0 here (we just reset rotation state).
+    let _ = super::sealfs_audit::on_mount(super::sealfs_rotation::current_generation());
+
     // try to mount/format the on-disk SealFS. Outside the
     // critical_section above because virtio-blk uses MMIO + DMA + IRQ
     // and shouldn't run with IRQs masked the whole time.
@@ -1148,6 +1171,12 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
 
 /// Read a file — decrypts and verifies integrity.
 /// Returns a buffer with plaintext content.
+///
+/// 2026-05-17 Eng-2: walks the rotation key history if AEAD with
+/// the live MASTER_KEY fails. Files written before a rotation
+/// transparently decrypt under their original generation's key,
+/// up to the rotation-history capacity. See `sealfs_rotation`
+/// for the threat model.
 pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
     // AUDIT-FS-C1: see create() for rationale.
     let _g = crate::kernel::sync::IrqGuard::new();
@@ -1158,21 +1187,13 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
             return Err("buffer too small");
         }
 
-        // Copy ciphertext to output buffer (decrypt in place).
+        // Snapshot ciphertext into the caller's buffer once. If
+        // the live-key decrypt fails we re-copy from source and
+        // try the next retired master key. The data_addr region
+        // is the source of truth — buf is the working copy.
         let src = entry.data_addr as *const u8;
         core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), entry.size);
 
-        // DESIGN_CRYPTO.md #2: ChaCha20-Poly1305 AEAD decrypt.
-        // AAD layout matches `create` byte-for-byte:
-        //   filename || sensitivity_byte || integrity_byte
-        // The labels come from the live entry — if an attacker has
-        // flipped either byte at rest, the AAD here differs from
-        // the encrypt-time AAD and decrypt_in_place_detached
-        // returns Err. The MLS labels are therefore
-        // cryptographically bound: tamper-and-bypass requires the
-        // file key (which would also let them just decrypt).
-        let file_key = derive_file_key(name);
-        let cipher = Cipher::new(&file_key.into());
         let tag_bytes: [u8; 16] = match entry.hash[..16].try_into() {
             Ok(b) => b,
             Err(_) => return Err("internal: tag slice"),
@@ -1186,14 +1207,48 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
         aad[name.len() + 1] = entry.integrity;
         aad[name.len() + 2 .. name.len() + 14].copy_from_slice(&entry.nonce);
         let aad_slice = &aad[..name.len() + 14];
-        cipher.decrypt_in_place_detached(
+
+        // Attempt #1 — live MASTER_KEY.
+        let file_key = derive_file_key(name);
+        let cipher = Cipher::new(&file_key.into());
+        let live_ok = cipher
+            .decrypt_in_place_detached(
                 (&entry.nonce).into(),
                 aad_slice,
                 &mut buf[..entry.size],
                 tag,
-            ).map_err(|_| "INTEGRITY VIOLATION — file tampered or label flipped")?;
+            )
+            .is_ok();
+        if live_ok {
+            return Ok(entry.size);
+        }
 
-        Ok(entry.size)
+        // Attempt #2..N — walk the rotation history youngest→
+        // oldest. Each attempt needs a fresh ciphertext copy
+        // because the previous decrypt mutated `buf` in place.
+        let found = super::sealfs_rotation::try_each_retired_key(|retired_master, _gen| {
+            let fkey = derive_file_key_from(retired_master, name);
+            let c = Cipher::new(&fkey.into());
+            core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), entry.size);
+            if c.decrypt_in_place_detached(
+                (&entry.nonce).into(),
+                aad_slice,
+                &mut buf[..entry.size],
+                tag,
+            )
+            .is_ok()
+            {
+                Some(())
+            } else {
+                None
+            }
+        });
+
+        if found.is_some() {
+            Ok(entry.size)
+        } else {
+            Err("INTEGRITY VIOLATION — file tampered or label flipped")
+        }
     }
 }
 
@@ -1385,6 +1440,90 @@ pub fn wipe_master_key() {
     }
     // Also reset the nonce counter so a future re-init starts clean.
     NONCE_COUNTER.store(0, core::sync::atomic::Ordering::Release);
+    // 2026-05-17 Eng-2: rotation history + journal + audit log are
+    // all per-boot RAM. Wipe them alongside the live MASTER_KEY so
+    // a `wipe::destroy_keys` pass also dispossesses an attacker of
+    // any retired master keys, any in-flight journal intents, and
+    // any audit-log evidence of pre-wipe activity. The audit-log
+    // reset means a forensic reader on the wiped device cannot
+    // see what happened on the volume prior to wipe — that's
+    // exactly the threat model for the wipe path.
+    let final_gen = super::sealfs_rotation::current_generation();
+    let _ = super::sealfs_audit::on_unmount(final_gen);
+    super::sealfs_rotation::reset();
+    super::sealfs_journal::reset();
+    super::sealfs_audit::reset();
+}
+
+/// `(old_generation, new_generation)` pair returned by
+/// [`rotate_master_key`]. Aliased so the function signature stays
+/// inside rustfmt's max-width budget without manual wrapping.
+pub type RotationGens = (
+    super::sealfs_rotation::KeyGen,
+    super::sealfs_rotation::KeyGen,
+);
+
+/// 2026-05-17 Eng-2 push: rotate the SealFS master key.
+///
+/// Replaces the live `MASTER_KEY` with `new_master_key`, retiring
+/// the old key into the rotation history ring (see
+/// `super::sealfs_rotation`). Subsequent `create()` writes derive
+/// per-file keys from the new master. `read()` of files written
+/// before rotation transparently falls back to the retired master
+/// key via the history walk in `read_with_key_fallback`.
+///
+/// Returns `(old_generation, new_generation)` so the caller can
+/// log a `RotationEvent` to the per-mount audit log (see
+/// `super::sealfs_audit`). Returns `Err` if the filesystem hasn't
+/// been initialised yet.
+///
+/// Threat model: rotation defends against in-RAM master-key
+/// exposure (cold-boot snoop, etc.) by limiting the window during
+/// which a leaked key can be used to encrypt NEW files. It has no
+/// retroactive effect — an attacker who captured the old key AND
+/// pre-rotation ciphertext can still read the affected files.
+///
+/// Acceptance test scenarios: `test_rotation_old_data_still_decryptable`
+/// + `test_rotation_new_data_uses_new_key` (see the
+/// `sealfs-rotation-selftest` shell command).
+pub fn rotate_master_key(new_master_key: &[u8; 32]) -> Result<RotationGens, &'static str> {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        if !INITIALIZED {
+            return Err("filesystem not initialized");
+        }
+    }
+    // Use the rotation primitive's `rotate` callback to swap in
+    // the new key + return the old key. Keeps MASTER_KEY private
+    // to this module while letting the rotation module own ring
+    // discipline.
+    let (old_gen, new_gen) = super::sealfs_rotation::rotate(|_tmp| unsafe {
+        // Read current live key.
+        let old = core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY));
+        // Install new key (volatile to defeat any LTO-driven
+        // DCE that might otherwise drop the write because the
+        // static appears un-aliased here).
+        let dst = core::ptr::addr_of_mut!(MASTER_KEY) as *mut u8;
+        for i in 0..32 {
+            core::ptr::write_volatile(dst.add(i), new_master_key[i]);
+        }
+        old
+    });
+    // Record the rotation in the per-mount audit log so a
+    // forensic reader can answer "did this volume ever rotate?"
+    // without inspecting the live RAM key material. Failure to
+    // record (ring full) is non-fatal — the rotation itself
+    // succeeded and the audit-log-full case is documented.
+    let _ = super::sealfs_audit::on_rotation(old_gen, new_gen);
+    Ok((old_gen, new_gen))
+}
+
+/// Derive a per-file key from an arbitrary master key + filename,
+/// mirroring [`derive_file_key`] but without reading the live
+/// MASTER_KEY static. Used by [`read_with_key_fallback`] when
+/// walking the rotation history.
+fn derive_file_key_from(master: &[u8; 32], filename: &str) -> [u8; 32] {
+    sha256::derive_key(master, filename.as_bytes())
 }
 
 fn find_file(name: &str) -> Result<&'static FileEntry, &'static str> {

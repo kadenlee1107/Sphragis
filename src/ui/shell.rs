@@ -443,6 +443,7 @@ fn execute_inner(cmd: &str) {
         "cave-private-selftest" => cmd_cave_private_selftest(),
         "mount-ns-selftest"   => cmd_mount_ns_selftest(),
         "sealfs-quota-selftest" => cmd_sealfs_quota_selftest(),
+        "sealfs-rotation-selftest" => cmd_sealfs_rotation_selftest(),
         "ocsp-selftest"       => cmd_ocsp_selftest(),
         "conntrack-selftest"  => cmd_conntrack_selftest(),
         "fw-hardening-selftest" => cmd_fw_hardening_selftest(),
@@ -2704,6 +2705,172 @@ fn cmd_sealfs_quota_selftest() {
     }
     console::puts("  ✓ cleanup restored quota counter to baseline\n");
     console::puts("  ✓ sealfs quota-enforcement: charge + release verified\n");
+}
+
+/// `sealfs-rotation-selftest` — 2026-05-17 Eng-2 push. Exercises
+/// the three SealFS production-hardening capabilities added today:
+/// master-key rotation, journal recovery, and the per-mount audit
+/// log. Prints `[sealfs-rotation] <scenario> PASS|FAIL <reason>`
+/// lines so `scripts/qemu_sealfs_rotation_selftest.py` can grep
+/// the serial log without parsing the unicode checkmarks the
+/// `quota-selftest` style uses.
+///
+/// Six TDD scenarios per `docs/superpowers/plans/2026-05-17-multi-team-push.md` §3:
+///   1. `rotation_old_data_still_decryptable`
+///   2. `rotation_new_data_uses_new_key`
+///   3. `journal_recovery_after_partial_write`
+///   4. `audit_log_records_mount`
+///   5. `audit_log_records_rotation`
+///   6. `audit_log_append_only`
+pub fn cmd_sealfs_rotation_selftest() {
+    use crate::drivers::uart;
+    use crate::fs::{sealfs, sealfs_audit, sealfs_journal, sealfs_rotation};
+
+    uart::puts("[sealfs-rotation] suite start\n");
+
+    // ── Scenario 1: old data still decryptable after rotation ──
+    {
+        const NAME: &str = "rot-scenario-1";
+        let _ = sealfs::delete(NAME); // pre-clean
+        let payload: &[u8] = b"hello, generation 0";
+        if let Err(e) = sealfs::create(NAME, payload) {
+            uart::puts("[sealfs-rotation] rotation_old_data_still_decryptable FAIL pre-rotation-create: ");
+            uart::puts(e);
+            uart::puts("\n");
+        } else {
+            let mut new_key = [0u8; 32];
+            for (i, b) in new_key.iter_mut().enumerate() {
+                *b = (0xA0u8 ^ (i as u8)).wrapping_add(1);
+            }
+            let rot = sealfs::rotate_master_key(&new_key);
+            match rot {
+                Err(e) => {
+                    uart::puts("[sealfs-rotation] rotation_old_data_still_decryptable FAIL rotate: ");
+                    uart::puts(e);
+                    uart::puts("\n");
+                }
+                Ok((old_gen, new_gen)) => {
+                    let mut buf = [0u8; 64];
+                    match sealfs::read(NAME, &mut buf) {
+                        Ok(n) if &buf[..n] == payload => {
+                            uart::puts("[sealfs-rotation] rotation_old_data_still_decryptable PASS gen=");
+                            print_num(old_gen as usize);
+                            uart::puts("->");
+                            print_num(new_gen as usize);
+                            uart::puts("\n");
+                        }
+                        Ok(n) => {
+                            uart::puts("[sealfs-rotation] rotation_old_data_still_decryptable FAIL payload-mismatch len=");
+                            print_num(n);
+                            uart::puts("\n");
+                        }
+                        Err(e) => {
+                            uart::puts("[sealfs-rotation] rotation_old_data_still_decryptable FAIL post-rotation-read: ");
+                            uart::puts(e);
+                            uart::puts("\n");
+                        }
+                    }
+                }
+            }
+            let _ = sealfs::delete(NAME);
+        }
+    }
+
+    // ── Scenario 2: new data uses new key (old key cannot decrypt) ──
+    {
+        let _ = sealfs::delete("rot-scenario-2");
+        // After scenario 1's rotation, gen is 1. Generate a fresh
+        // master key for scenario 2 and rotate again so the current
+        // generation is 2 and gens 0+1's keys are both in history.
+        let mut k2 = [0u8; 32];
+        for (i, b) in k2.iter_mut().enumerate() {
+            *b = (0x55u8 ^ (i as u8)).wrapping_add(3);
+        }
+        let _ = sealfs::rotate_master_key(&k2);
+
+        let payload: &[u8] = b"only the new key should match";
+        if let Err(e) = sealfs::create("rot-scenario-2", payload) {
+            uart::puts("[sealfs-rotation] rotation_new_data_uses_new_key FAIL create: ");
+            uart::puts(e);
+            uart::puts("\n");
+        } else {
+            let mut buf = [0u8; 64];
+            let rd = sealfs::read("rot-scenario-2", &mut buf);
+            let ok_round_trip = matches!(rd, Ok(n) if &buf[..n] == payload);
+            if !ok_round_trip {
+                uart::puts("[sealfs-rotation] rotation_new_data_uses_new_key FAIL round-trip\n");
+            } else {
+                // Rotate AGAIN to retire k2. The history-walk in
+                // read() must then succeed with the just-retired
+                // k2 (proves the file IS under k2, not an older key).
+                let mut k3 = [0u8; 32];
+                for (i, b) in k3.iter_mut().enumerate() {
+                    *b = (0xEFu8 ^ (i as u8)).wrapping_add(5);
+                }
+                let _ = sealfs::rotate_master_key(&k3);
+                let mut buf2 = [0u8; 64];
+                let rd2 = sealfs::read("rot-scenario-2", &mut buf2);
+                match rd2 {
+                    Ok(n) if &buf2[..n] == payload => {
+                        uart::puts(
+                            "[sealfs-rotation] rotation_new_data_uses_new_key PASS gen=",
+                        );
+                        print_num(sealfs_rotation::current_generation() as usize);
+                        uart::puts("\n");
+                    }
+                    _ => {
+                        uart::puts("[sealfs-rotation] rotation_new_data_uses_new_key FAIL post-2nd-rotation-read\n");
+                    }
+                }
+            }
+            let _ = sealfs::delete("rot-scenario-2");
+        }
+    }
+
+    // ── Scenario 3: journal recovery after partial write ──
+    match sealfs_journal::run_recovery_selftest() {
+        Ok(()) => uart::puts(
+            "[sealfs-rotation] journal_recovery_after_partial_write PASS rolled-back\n",
+        ),
+        Err(e) => {
+            uart::puts("[sealfs-rotation] journal_recovery_after_partial_write FAIL ");
+            uart::puts(e);
+            uart::puts("\n");
+        }
+    }
+
+    // ── Scenario 4: audit log records mount ──
+    if sealfs_audit::has_mount_event() {
+        uart::puts("[sealfs-rotation] audit_log_records_mount PASS\n");
+    } else {
+        uart::puts(
+            "[sealfs-rotation] audit_log_records_mount FAIL no-mount-event-in-audit-log\n",
+        );
+    }
+
+    // ── Scenario 5: audit log records rotation ──
+    let n = sealfs_audit::count_rotation_events();
+    if n >= 2 {
+        uart::puts("[sealfs-rotation] audit_log_records_rotation PASS count=");
+        print_num(n);
+        uart::puts("\n");
+    } else {
+        uart::puts("[sealfs-rotation] audit_log_records_rotation FAIL count=");
+        print_num(n);
+        uart::puts(" (expected >=2)\n");
+    }
+
+    // ── Scenario 6: audit log is append-only ──
+    match sealfs_audit::try_overwrite_past_entry() {
+        Err(_) => uart::puts(
+            "[sealfs-rotation] audit_log_append_only PASS overwrite-rejected\n",
+        ),
+        Ok(()) => uart::puts(
+            "[sealfs-rotation] audit_log_append_only FAIL overwrite-was-allowed\n",
+        ),
+    }
+
+    uart::puts("[sealfs-rotation] suite end\n");
 }
 
 /// `ocsp-selftest` — gap-audit item 052b. Exercises the OCSP

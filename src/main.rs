@@ -513,6 +513,16 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
                 ui::shell::cmd_x509_selftest();
                 drivers::uart::puts("[selftest] running scheduler-selftest before auth gate...\n");
                 ui::shell::cmd_scheduler_selftest();
+                // 2026-05-17 Eng-2 push: SealFS rotation + journal +
+                // audit hardening. Drives the 6 §3 (Eng-2) TDD
+                // scenarios through serial so
+                // `scripts/qemu_sealfs_rotation_selftest.py` can
+                // verify each `[sealfs-rotation] <scenario> PASS`
+                // line lands before the auth gate banner.
+                drivers::uart::puts(
+                    "[selftest] running sealfs-rotation-selftest before auth gate...\n",
+                );
+                ui::shell::cmd_sealfs_rotation_selftest();
             }
 
             // PQ-INTEROP boot hook (gated by Cargo feature

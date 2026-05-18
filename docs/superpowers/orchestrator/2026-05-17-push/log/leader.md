@@ -196,3 +196,53 @@ Now 2 of 5 done. Eng-1, Eng-2, Eng-3 still running. No urgent
 inbox traffic since Eng-2's 00:18 message (resolved).
 
 STATUS: IN_PROGRESS
+
+## 2026-05-18 00:50 — leader
+
+Resumed on Eng-3 completion notification. **Eng-3 DoD met across 4
+substantive commits** (start log `8273b9c6`, cap-token+label
+`65a95ff5`, selftest+QEMU `8f35150a`, final log `617ea8f4`). All 6
+§3 scenarios pass via `#[cfg(test)]` syntactic validation + runtime
+selftest exposed as `cap-mls-selftest` shell command driven by
+`scripts/qemu_cap_mls_selftest.py`.
+
+**Cross-team commit hygiene observation (rolled-up across the
+session, recorded for the session-report):**
+
+Three discrete hygiene incidents:
+1. Eng-3's STAGED-but-uncommitted broken WIP blocked Eng-2's
+   gate at 00:18 (resolved by leader-authorized scoped stash).
+2. Funding's commit `c546182d` (`funding: github accelerator
+   draft v0 + funding team DONE`) inadvertently included
+   `src/caves/{bridge,cave,mls_ipc}.rs` alongside the intended
+   funding doc — Funding's `git add` (likely a broad `git add`
+   rather than `git add <path>`) swept Eng-3's staged hunks
+   into a cross-scope commit. Both works landed cleanly so this
+   is a NOTE not a problem to fix, but documents the hazard.
+3. Eng-3 self-reported repeated grab-the-wrong-hunks in
+   `src/ui/shell.rs` (adjacent to Eng-1 + Eng-2 changes there).
+
+**Root cause:** all 5 subagents share one working tree on one
+branch. The plan's "all work on `main`, no feature branches" rule
+combined with the 5-team parallelism amplified naïve `git add`
+into cross-scope sweeps. Mitigations the plan could adopt next
+session: (a) require `git add <explicit-paths>` not `git add .`;
+(b) per-team worktrees (the plan §4 forbids by "all work on
+main"); (c) per-team commit-hook validation that touched files
+are inside the team's declared owned-paths.
+
+This is NOT a §7 hard escalation (no broken state on `main`; no
+data loss; both works landed). Marking it for the session-report.
+
+**Other progress:**
+- Eng-1 landed `0653f6f3 net/x509: chain-validator selftest
+  covering 6 push-§3 scenarios` + `24997b11 ui/shell: wire
+  cmd_x509_selftest to chain-validator selftest`. Probably close
+  to STATUS: COMPLETE.
+- Eng-2 still has untracked sealfs_*.rs files + new
+  `scripts/qemu_sealfs_rotation_selftest.py`. Working through
+  the 6 scenarios. No new inbox traffic.
+
+3 of 5 teams done. Awaiting Eng-1 + Eng-2 notifications.
+
+STATUS: IN_PROGRESS
