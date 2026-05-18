@@ -34,3 +34,22 @@ hook reported `done — 1079 note(s) changed, 0 orphan(s) pruned`.
 §9.5 starting now: scaffold log/, inbox/, decisions/ with one-line headers.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-17 23:45 — leader
+
+§9.5 (scaffold) done — committed `0d3f37c4` (13 files, status.md + 6
+team logs + 6 inbox files). Hook reported done with 1092 notes changed.
+
+§9.6 (TeamCreate probe) done — `TeamCreate{team_name=probe-team}`
+returned a valid team_file_path; `Agent{team_name=probe-team,
+name=probe-agent, …}` spawned asynchronously and the agent's edit to
+`inbox/to-leader.md` landed (verified by reading the file). Execution
+model decision recorded in `decisions/0001-team-execution-model.md`:
+**long-running TeamCreate agents, vault-mediated coordination, no
+SendMessage for coordination, `run_in_background: true` on each Agent
+spawn**. Test team deleted via `TeamDelete` cleanly.
+
+§9.7 starting now: spawn 5 teams (Eng-1, Eng-2, Eng-3, Funding,
+Outreach) in priority order, each with full charter prompt.
+
+STATUS: IN_PROGRESS

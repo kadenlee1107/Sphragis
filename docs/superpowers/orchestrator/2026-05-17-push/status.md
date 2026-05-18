@@ -1,7 +1,7 @@
-# 2026-05-17 Push Status — last update 23:42
+# 2026-05-17 Push Status — last update 23:45
 
 ## Leader
-Current focus: Pre-flight (§9). Workspace scaffold landing now; team spawn next.
+Current focus: §9.7 — spawning 5 teams (Eng-1, Eng-2, Eng-3, Funding, Outreach).
 
 ## Eng-1 (TLS)
 Last update: —
