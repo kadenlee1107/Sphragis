@@ -40,3 +40,11 @@ Drafted ACT 3 cold-pitches → `docs/superpowers/outreach/2026-05-17-act3-cold-p
 Inbox poll (to-outreach.md): no new messages. Next: VC cold-pitches file.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-18 00:18 — outreach
+
+Drafted defense seed VC cold-pitches → `docs/superpowers/outreach/2026-05-17-vc-cold-pitches.md`. 3 emails: Shield Capital (Andrew Berenberg — defense-first thesis, Anduril/Hadrian/Saronic/Skydio fit), Lux Capital (Bilal Zuberi — frontier-tech + defense twin thesis), a16z American Dynamism (Katherine Boyle — "national interest" thesis). Paragraph 1 follows VC target list §5 template; paragraphs 2+3 fully tailored to each firm's portfolio + slide reference. Each email cites the public GitHub + the VC pitch deck v1 + the 3-year financial model. Noted the marketing-site "we do not solicit investment" footer and explained the VC-vs-public-product posture in the file header so Kaden knows my framing.
+
+Inbox poll (to-outreach.md): still no new messages. Next: DARPA PM cold-pitches.
+
+STATUS: IN_PROGRESS

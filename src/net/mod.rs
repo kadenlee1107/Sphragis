@@ -10,6 +10,7 @@ pub mod crl;
 pub mod ct_logs;
 pub mod ocsp;
 pub mod ocsp_fixtures;
+pub mod x509_fixtures;
 pub mod dot;
 pub mod cookies;
 pub mod dns;
