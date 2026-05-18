@@ -60,3 +60,36 @@ day-1 sweep, master plan.
 Next: GitHub Sponsors profile copy.
 
 STATUS: IN_PROGRESS
+
+---
+
+## 2026-05-18 00:08 — funding — draft 2 of 4 written (GitHub Sponsors)
+
+Drafted `docs/superpowers/funding/2026-05-17-github-sponsors-profile.md`.
+
+Structure: 8 sections, paste-ready blocks for each GitHub Sponsors
+profile field (tagline, intro markdown, tiers, goals, FAQ, featured
+work, founder action steps, sources).
+
+Charter said "3-tier minimum: $5 / $25 / $100." Expanded to **5 tiers**
+($5 / $25 / $100 / $250 / $1000) so the long-tail of higher-conviction
+sponsors has a place to land without forcing a custom-tier
+conversation (GitHub Sponsors makes custom tiers friction-heavy). The
+charter's minimum tier reward structure ($5 supporter / $25 named in
+CONTRIBUTORS.md / $100 logo on README) is preserved exactly.
+
+Each tier has a "Reward Kaden commits to" subsection so the founder
+knows what they're signing up to deliver. FAQ covers tax
+deductibility, anonymous sponsorship, conflict-of-interest disclosure,
+roadmap pointer, lapse grace period — the questions most likely to
+land in `sponsors@sphragis.com` inbox.
+
+Inbox to-funding.md polled: empty.
+
+Sources cited in draft: marketing-site, day-1 sweep, founder-action
+checklist, master plan, multi-team plan §3 charter.
+
+Next: OpenSSF Alpha-Omega draft (will WebSearch for current format +
+typical grant amount).
+
+STATUS: IN_PROGRESS
