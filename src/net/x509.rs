@@ -572,6 +572,25 @@ pub fn verify_chain(
     chain_ders: &[&[u8]],
     hostname: &[u8],
 ) -> VerifyOutcome {
+    verify_chain_with_anchors(leaf_der, chain_ders, hostname, TRUST_STORE)
+}
+
+/// Like `verify_chain`, but takes the trust-anchor slice as a parameter
+/// instead of consulting `TRUST_STORE` directly. Public so the
+/// chain-validator selftest (`run_chain_selftest`) and any future
+/// per-deployment anchor override can drive validation against a
+/// purpose-built anchor set.
+///
+/// Eng-1 TDD scenarios (2026-05-17 push §3) call this with a single
+/// synthetic anchor per scenario so each test is independent of the
+/// production `TRUST_STORE`. Production code keeps using `verify_chain`
+/// (which forwards `TRUST_STORE`) — the public API there is unchanged.
+pub fn verify_chain_with_anchors(
+    leaf_der: &[u8],
+    chain_ders: &[&[u8]],
+    hostname: &[u8],
+    anchors: &[&[u8]],
+) -> VerifyOutcome {
     let leaf = match parse_cert(leaf_der) {
         Ok(c) => c,
         Err(e) => return VerifyOutcome::Err(e),
@@ -624,12 +643,12 @@ pub fn verify_chain(
     };
 
     // x509-hardening-c: precompute which chain certs are anchor-equivalent
-    // (share an SPKI with a TRUST_STORE entry). For pathLen counting these
+    // (share an SPKI with a trust-anchor entry). For pathLen counting these
     // are NOT real intermediates — they are the trust anchor presented in
     // chain form (cross-sign or duplicate self-sign). Counting them as
     // intermediates is what tripped strict pathLen against real-world
     // Let's Encrypt and Cloudflare chains in PR-b.
-    let trust_spkis: Vec<Vec<u8>> = TRUST_STORE
+    let trust_spkis: Vec<Vec<u8>> = anchors
         .iter()
         .filter_map(|der| parse_cert(der).ok())
         .map(|c| {
@@ -733,7 +752,7 @@ pub fn verify_chain(
 
     // 3. Root in trust store? Three accept paths, walked in order of
     // cost. All three are spec-equivalent ways of saying "the chain
-    // rooted at some entry in TRUST_STORE":
+    // rooted at some entry in `anchors`":
     //
     // a. Current cert IS an anchor (server included its own root in
     // the chain — uncommon but legal).
@@ -752,7 +771,7 @@ pub fn verify_chain(
     // Let's Encrypt / GTS-anchored sites that don't ship the root
     // failed at "untrusted root" even though the chain is valid.
     let mut trusted = false;
-    for anchor_der in TRUST_STORE.iter() {
+    for anchor_der in anchors.iter() {
         // Path (a): exact-bytes equality.
         if anchor_der == &current_der {
             trusted = true;
@@ -776,7 +795,7 @@ pub fn verify_chain(
         }
     }
 
-    if TRUST_STORE.is_empty() {
+    if anchors.is_empty() {
         // V5-CRYPTO-004 / V5-CHAIN-001 fix: empty trust store now returns
         // UntrustedRoot — the previous "Ok if empty" behaviour made all
         // of V4's chain validation a no-op on shipped builds because
