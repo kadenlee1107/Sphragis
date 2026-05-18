@@ -82,3 +82,33 @@ eng-1-tls test-team deleted to free the leader from team-leadership.
 Spawning all 5 subagents now.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-17 00:08 — leader
+
+All 5 subagents spawned successfully via parallel `Agent{
+run_in_background=true, subagent_type=general-purpose}` calls in a
+single message block:
+
+- `eng-1-tls` → agent running
+- `eng-2-sealfs` → agent running
+- `eng-3-caves` → agent running
+- `funding` → agent running
+- `outreach` → agent running
+
+Initial logs already landing:
+- **Eng-1**: confirmed `src/net/x509.rs` is substantially complete
+  per day-1 sweep claim. 15 error variants, anchor-aware pathLen,
+  BasicConstraints/KeyUsage/EKU enforcement, constant-cost abort
+  discipline. Chain validation called from `src/net/tls.rs:1055`.
+  Existing `cmd_x509_selftest` covers 2 scenarios; Eng-1 will add
+  the 6 §3 scenarios as a new selftest behind a Cargo feature flag
+  driven by a new QEMU smoke script. No Cargo.lock changes
+  anticipated.
+- **Funding**: drafting order set (BIS → Sponsors → OpenSSF →
+  Accelerator), shortest-first.
+- Eng-2, Eng-3, Outreach: still booting; logs not yet written.
+
+Entering §9.8 coordination loop. Will resume on completion
+notifications or significant inbox events.
+
+STATUS: IN_PROGRESS
