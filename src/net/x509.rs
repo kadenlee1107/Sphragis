@@ -1084,3 +1084,257 @@ fn cert_verify_rsa_pss_sha512(spki_der: &[u8], msg: &[u8], sig: &[u8])
     crate::crypto::sig::rsa_pss_sha512_verify(inner, msg, sig)
         .map_err(|_| VerifyError::BadSignature)
 }
+
+// ═══════════════════════════════════════════════════════════════
+// X.509 CHAIN-VALIDATOR SELFTEST — 6 TDD scenarios from the
+// 2026-05-17 multi-team-push plan §3 (Eng-1).
+//
+// The scenarios run BOTH:
+//   * as host-target `#[cfg(test)]` integration tests inside the
+//     `mod tests` block at the bottom of this file (compile-only
+//     today because `aarch64-unknown-none` has no `test` crate;
+//     they assert the same outcomes when the kernel grows a
+//     host-target lib in a future cycle), AND
+//   * as a boot-time selftest function (`run_chain_selftest`)
+//     callable from `cmd_x509_selftest` under the
+//     `selftest-on-boot` Cargo feature so a headless QEMU smoke
+//     (`scripts/qemu_x509_chain_selftest.py`) can capture the
+//     `[x509-chain-selftest] <scenario> PASS|FAIL <reason>` lines
+//     via serial.
+//
+// Each scenario drives `verify_chain_with_anchors` against a
+// synthetic ECDSA-P256 chain pre-baked under
+// `src/net/x509_fixtures/`. The anchor slice changes per scenario:
+// the four "good-internal" scenarios (valid, sig mismatch, expired,
+// BC violation) use the scenario-specific root as the sole trust
+// anchor; the unknown-root scenario passes a DIFFERENT root as the
+// anchor so the validator returns UntrustedRoot.
+// ═══════════════════════════════════════════════════════════════
+
+/// Result of one chain-validator scenario. Carries the scenario
+/// label and a static reason on failure so the QEMU smoke script
+/// can grep the failure for context.
+#[derive(Clone, Copy)]
+pub struct ChainScenarioResult {
+    pub label: &'static str,
+    pub pass: bool,
+    pub reason: &'static str,
+}
+
+/// Run all 6 chain-validator scenarios. Returns the result array in
+/// scenario order. Callers (boot hook + shell command) decide how to
+/// surface PASS/FAIL.
+pub fn run_chain_selftest() -> [ChainScenarioResult; 6] {
+    use crate::net::x509_fixtures::*;
+
+    let host = SELFTEST_HOSTNAME;
+
+    // ── Scenario 1 — valid 3-level chain ─────────────────────
+    let s1 = {
+        let anchors: &[&[u8]] = &[VALID_ROOT_DER];
+        let chain: &[&[u8]] = &[VALID_INTERMEDIATE_DER];
+        match verify_chain_with_anchors(VALID_LEAF_DER, chain, host, anchors) {
+            VerifyOutcome::Ok { .. } => ChainScenarioResult {
+                label: "valid_chain_3_levels",
+                pass: true,
+                reason: "",
+            },
+            VerifyOutcome::Err(e) => ChainScenarioResult {
+                label: "valid_chain_3_levels",
+                pass: false,
+                reason: e.as_static_str(),
+            },
+        }
+    };
+
+    // ── Scenario 2 — leaf signature mismatch (BadSignature) ──
+    let s2 = {
+        let anchors: &[&[u8]] = &[BADSIG_ROOT_DER];
+        let chain: &[&[u8]] = &[BADSIG_INTERMEDIATE_DER];
+        match verify_chain_with_anchors(BADSIG_LEAF_DER, chain, host, anchors) {
+            VerifyOutcome::Err(VerifyError::BadSignature) => ChainScenarioResult {
+                label: "chain_signature_mismatch",
+                pass: true,
+                reason: "",
+            },
+            VerifyOutcome::Err(other) => ChainScenarioResult {
+                label: "chain_signature_mismatch",
+                pass: false,
+                reason: other.as_static_str(),
+            },
+            VerifyOutcome::Ok { .. } => ChainScenarioResult {
+                label: "chain_signature_mismatch",
+                pass: false,
+                reason: "expected BadSignature, got Ok",
+            },
+        }
+    };
+
+    // ── Scenario 3 — expired intermediate (Expired) ──────────
+    let s3 = {
+        let anchors: &[&[u8]] = &[EXPIRED_ROOT_DER];
+        let chain: &[&[u8]] = &[EXPIRED_INTERMEDIATE_DER];
+        match verify_chain_with_anchors(EXPIRED_LEAF_DER, chain, host, anchors) {
+            VerifyOutcome::Err(VerifyError::Expired) => ChainScenarioResult {
+                label: "chain_expired_intermediate",
+                pass: true,
+                reason: "",
+            },
+            VerifyOutcome::Err(other) => ChainScenarioResult {
+                label: "chain_expired_intermediate",
+                pass: false,
+                reason: other.as_static_str(),
+            },
+            VerifyOutcome::Ok { .. } => ChainScenarioResult {
+                label: "chain_expired_intermediate",
+                pass: false,
+                reason: "expected Expired, got Ok",
+            },
+        }
+    };
+
+    // ── Scenario 4 — unknown root (UntrustedRoot) ────────────
+    // Drive the unknown_* chain against the VALID_ROOT_DER anchor.
+    // The chain is internally consistent (sigs check, validity
+    // OK, BC/KU/EKU OK) but no anchor in the slice can validate
+    // the unknown_intermediate's signature.
+    let s4 = {
+        let anchors: &[&[u8]] = &[VALID_ROOT_DER];
+        let chain: &[&[u8]] = &[UNKNOWN_INTERMEDIATE_DER];
+        match verify_chain_with_anchors(UNKNOWN_LEAF_DER, chain, host, anchors) {
+            VerifyOutcome::Err(VerifyError::UntrustedRoot) => ChainScenarioResult {
+                label: "chain_unknown_root",
+                pass: true,
+                reason: "",
+            },
+            VerifyOutcome::Err(other) => ChainScenarioResult {
+                label: "chain_unknown_root",
+                pass: false,
+                reason: other.as_static_str(),
+            },
+            VerifyOutcome::Ok { .. } => ChainScenarioResult {
+                label: "chain_unknown_root",
+                pass: false,
+                reason: "expected UntrustedRoot, got Ok",
+            },
+        }
+    };
+
+    // ── Scenario 5 — BasicConstraints violation ──────────────
+    // Leaf has cA:TRUE → `check_basic_constraints(leaf=true)` flags it.
+    let s5 = {
+        let anchors: &[&[u8]] = &[BCLEAF_ROOT_DER];
+        let chain: &[&[u8]] = &[BCLEAF_INTERMEDIATE_DER];
+        match verify_chain_with_anchors(BCLEAF_LEAF_DER, chain, host, anchors) {
+            VerifyOutcome::Err(VerifyError::BasicConstraintsViolation) => ChainScenarioResult {
+                label: "chain_basic_constraints_violated",
+                pass: true,
+                reason: "",
+            },
+            VerifyOutcome::Err(other) => ChainScenarioResult {
+                label: "chain_basic_constraints_violated",
+                pass: false,
+                reason: other.as_static_str(),
+            },
+            VerifyOutcome::Ok { .. } => ChainScenarioResult {
+                label: "chain_basic_constraints_violated",
+                pass: false,
+                reason: "expected BasicConstraintsViolation, got Ok",
+            },
+        }
+    };
+
+    // ── Scenario 6 — revocation stub returns Ok ──────────────
+    //
+    // Revocation in the verifier (lines ~825-844 of verify_chain)
+    // consults `crl::is_revoked` and `ocsp::status` against the
+    // SHA-256 of the leaf's issuer SPKI plus the leaf's serial.
+    // For this milestone we treat revocation as a STUB: no entry
+    // is pre-seeded in either store, so both calls return "not
+    // revoked" and the verifier returns Ok.
+    //
+    // A future cycle wires real OCSP/CRL fetching (out of scope per
+    // §3 — "Real OCSP or CRL fetching" is explicitly listed). When
+    // it does, this scenario will grow into "revoked-cert path
+    // returns Revoked" / "valid-cert path stays Ok"; for now it
+    // proves the stub contract by re-running the valid chain and
+    // confirming no spurious Revoked error appears.
+    let s6 = {
+        let anchors: &[&[u8]] = &[VALID_ROOT_DER];
+        let chain: &[&[u8]] = &[VALID_INTERMEDIATE_DER];
+        match verify_chain_with_anchors(VALID_LEAF_DER, chain, host, anchors) {
+            VerifyOutcome::Ok { .. } => ChainScenarioResult {
+                label: "revocation_stub_returns_ok",
+                pass: true,
+                reason: "",
+            },
+            VerifyOutcome::Err(VerifyError::Revoked) => ChainScenarioResult {
+                label: "revocation_stub_returns_ok",
+                pass: false,
+                reason: "stub returned Revoked instead of Ok",
+            },
+            VerifyOutcome::Err(other) => ChainScenarioResult {
+                label: "revocation_stub_returns_ok",
+                pass: false,
+                reason: other.as_static_str(),
+            },
+        }
+    };
+
+    [s1, s2, s3, s4, s5, s6]
+}
+
+// ─── Host-target `#[cfg(test)]` mirror ─────────────────────────
+//
+// Today these are dead code: `aarch64-unknown-none` has no `test`
+// crate, so `cargo test --workspace` returns 0 and `cargo check
+// --tests --target aarch64-unknown-none` errors with E0463 ("can't
+// find crate for `test`"). The block is left in place so when the
+// kernel grows a host-target lib (or a build.rs-generated harness),
+// the assertions transfer verbatim without re-deriving the scenario
+// shape. The boot-side `run_chain_selftest()` above is the canonical
+// gate today.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run() -> [ChainScenarioResult; 6] {
+        run_chain_selftest()
+    }
+
+    #[test]
+    fn test_valid_chain_3_levels() {
+        let r = run();
+        assert!(r[0].pass, "{} failed: {}", r[0].label, r[0].reason);
+    }
+
+    #[test]
+    fn test_chain_signature_mismatch() {
+        let r = run();
+        assert!(r[1].pass, "{} failed: {}", r[1].label, r[1].reason);
+    }
+
+    #[test]
+    fn test_chain_expired_intermediate() {
+        let r = run();
+        assert!(r[2].pass, "{} failed: {}", r[2].label, r[2].reason);
+    }
+
+    #[test]
+    fn test_chain_unknown_root() {
+        let r = run();
+        assert!(r[3].pass, "{} failed: {}", r[3].label, r[3].reason);
+    }
+
+    #[test]
+    fn test_chain_basic_constraints_violated() {
+        let r = run();
+        assert!(r[4].pass, "{} failed: {}", r[4].label, r[4].reason);
+    }
+
+    #[test]
+    fn test_revocation_stub_returns_ok() {
+        let r = run();
+        assert!(r[5].pass, "{} failed: {}", r[5].label, r[5].reason);
+    }
+}
