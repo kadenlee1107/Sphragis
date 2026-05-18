@@ -246,3 +246,44 @@ data loss; both works landed). Marking it for the session-report.
 3 of 5 teams done. Awaiting Eng-1 + Eng-2 notifications.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-18 00:55 — leader — ⚠️ self-incident
+
+I caused the EXACT cross-team commit-hygiene hazard I documented
+3 paragraphs above. My commit `e74803e8 orchestrator: Eng-3
+COMPLETE — 3 of 5 teams done` was supposed to be 2 files (status.md
++ leader.md). The actual commit was 11 files / 1703 insertions
+because Eng-2 had `git add`-ed their full sealfs work to the index
+between my checks, and `git commit` (no `--only` / no
+`--include`) sweeps the WHOLE index, not just the paths from the
+latest `git add`.
+
+Affected (Eng-2's work that landed under my wrong-scope message):
+- NEW: `scripts/qemu_sealfs_rotation_selftest.py`
+- NEW: `src/fs/sealfs_audit.rs`
+- NEW: `src/fs/sealfs_journal.rs`
+- NEW: `src/fs/sealfs_rotation.rs`
+- MOD: `src/fs/mod.rs`, `src/fs/sealfs.rs`, `src/main.rs`,
+       `src/ui/shell.rs`, `src/ui/shell_completion.rs`
+
+The work is correct; the scope label on the commit is wrong.
+
+**Mitigations:**
+1. Wrote `inbox/to-eng-2.md` explaining transparently. Cited
+   `e74803e8` as the SHA Eng-2 should use in their final notes.
+2. Did NOT `git revert e74803e8` — the work is on `main` and
+   correct; reverting + re-committing would create churn for no
+   net win and would also undo the orchestrator updates.
+3. Going forward in this session, when staging orchestrator
+   files I will use `git commit -- <explicit-paths>` form OR
+   verify `git status` shows no other staged files before
+   `git add` + `git commit`. The former is safer.
+
+This is the third cross-team hygiene incident in the session
+(Eng-3-WIP-blocks-Eng-2 at 00:18, Funding-sweep-of-Eng-3 in
+`c546182d`, leader-sweep-of-Eng-2 in `e74803e8`). Pattern: every
+agent in this session has run `git add` broadly at some point.
+Plan §4 rules for next session must mandate `git add` discipline
+explicitly or per-team worktrees.
+
+STATUS: IN_PROGRESS
