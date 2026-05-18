@@ -1,5 +1,6 @@
 pub mod kits;
 pub mod bridge;
+pub mod cap_mls_selftest;
 pub mod cap_token;
 pub mod cave;
 pub mod cave_private;

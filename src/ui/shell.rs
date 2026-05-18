@@ -461,6 +461,7 @@ fn execute_inner(cmd: &str) {
         "integ-show"          => cmd_integ_show(),
         "biba-selftest"       => cmd_biba_selftest(),
         "mls-binding-selftest" => cmd_mls_binding_selftest(),
+        "cap-mls-selftest"    => crate::caves::cap_mls_selftest::run(),
         "secmark-test-send"   => cmd_secmark_test_send(parts[1], parts[2]),
         "secmark-selftest"    => cmd_secmark_selftest(),
         "te-enable"           => cmd_te_enable(),

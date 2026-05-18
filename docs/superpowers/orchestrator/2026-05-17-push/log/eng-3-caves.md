@@ -64,3 +64,46 @@ First commit: starting log entry; second commit: first failing test
 (`test_label_dominance_self`) + minimal `mls_label` skeleton.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-18 00:30 — eng-3-caves
+
+Committed first commit `65a95ff5 caves: add MLS label dominance +
+capability tokens (TDD red+green)` containing:
+
+  - `src/caves/cap_token.rs` (320 lines): `CapToken`, mint, verify,
+    constant-time tag compare (`ct_eq_32`), per-boot key derived from
+    SealFS master via HMAC-SHA256 with domain separator
+    `cap-token-mac-v1`. Scenarios 5 + 6 land as `#[cfg(test)] mod tests`.
+  - `src/caves/mls_label.rs` (290 lines): `MlsLabel`, `dominates`,
+    `strictly_dominates`, `check_flow`, typed `LabelViolation` enum.
+    Scenarios 1-4 land as `#[cfg(test)] mod tests`.
+  - `src/caves/mod.rs`: module registration.
+
+Tests are `#[cfg(test)]`-gated; they compile-validate the test bodies
+on any host with a working test harness, but `cargo test --workspace`
+on this kernel target is vacuous per §4 — no test harness on
+`aarch64-unknown-none` with `build-std=core,alloc`. Full runtime
+exercise lives in the upcoming `cap-mls-selftest` shell command.
+
+Started the integration commit covering `mls_ipc::call_with_token_*`,
+`bridge::propagate_cap_token_*`, and `cave::set_label_at_spawn`. Hit
+a duplicate-definition bug from an Edit-replay (the linter restoring
+file state then my second Edit re-adding), fixed it inline, but
+before I could commit Eng-2 hit it on their gate run and stashed my
+WIP. Leader (00:25 inbox) authorised the stash + told me to recover.
+
+Recovered via `git checkout 69941c3c -- src/caves/{cave,mls_ipc,
+bridge}.rs` (the stash merge commit). Build clean. Found that the
+funding team's `c546182d funding: github accelerator draft v0 +
+funding team DONE` commit had inadvertently swept my src/caves files
+along with their funding doc — so my WIP is actually already on main
+attributed to funding (`git show HEAD:src/caves/cave.rs | grep
+set_label_at_spawn` returns 2 matches). Cross-team commit hygiene
+is brittle in this multi-agent vault model; this is a soft
+follow-up for the orchestrator design (noted, not escalated).
+
+Net state: my Eng-3 caves work is on main as of c546182d. Next:
+add `cap-mls-selftest` shell command + `scripts/qemu_cap_mls_selftest.py`
+to exercise the six scenarios end-to-end in QEMU.
+
+STATUS: IN_PROGRESS
