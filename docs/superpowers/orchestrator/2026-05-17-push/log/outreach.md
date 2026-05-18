@@ -48,3 +48,15 @@ Drafted defense seed VC cold-pitches → `docs/superpowers/outreach/2026-05-17-v
 Inbox poll (to-outreach.md): still no new messages. Next: DARPA PM cold-pitches.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-18 00:30 — outreach
+
+Drafted DARPA PM cold-pitches → `docs/superpowers/outreach/2026-05-17-darpa-cold-pitches.md`. 3 emails: PROVERS (highest-fit per DARPA prep §2; framed as "application substrate where PROVERS tooling lands publication-grade evidence"), RSSC (lowest-friction entry; framed as "substrate the red team can't escape"), TRACTOR (modest-fit per DARPA prep §2; honest framing as "useful Rust target codebase, not a peer performer"). Chose TRACTOR as third instead of INSPECTA because DARPA prep §2 §INSPECTA explicitly counsels "Wait for PROVERS or RSSC engagement first" — a direct INSPECTA PM cold-pitch is contraindicated by the source.
+
+These emails are more technical than VC/prime per charter and follow DARPA prep §8 red-flag-5 "lead with the truth about what doesn't work yet" discipline — each email has a "what does NOT work yet" paragraph (Verus proofs spec'd not complete; x86_64 designed not built; FIPS module-boundary not certified). Addressees are role-based pending Kaden verifying current PM names per DARPA prep §4.
+
+DoD check: 3 files exist (act3, vc, darpa). 9 emails total (3 + 3 + 3). Each: subject + addressee + 3-paragraph body. ¶2 + ¶3 tailored. Public marketing site + GitHub + relevant source brief cited in each. Founder signature blocks left for Kaden per source brief instructions.
+
+Inbox poll (to-outreach.md): still empty. Next: assess time available for stretch goals (HN / Lobsters / LinkedIn) per charter.
+
+STATUS: IN_PROGRESS
