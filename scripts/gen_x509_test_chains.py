@@ -196,7 +196,16 @@ def main() -> None:
     today = now_utc()
     one_year_ago = today - timedelta(days=365)
     five_years_ahead = today + timedelta(days=365 * 5)
-    one_day_ago = today - timedelta(days=1)
+    # "Expired" anchor: pick a date safely in the past relative to any
+    # plausible `SPHRAGIS_BUILD_UNIX` value the kernel might see. The
+    # build.rs floor is 2026-01-01, and a stale build can pin the
+    # kernel's clock arbitrarily far behind wall-clock — so we use a
+    # date that pre-dates the floor (2025-01-01). The validity-period
+    # check fails Expired iff `now_unix > notAfter`, and the floor
+    # guarantees `now_unix >= 1_735_689_600 (2025-01-01 UTC)`, so this
+    # cert is reliably "expired" without depending on a fresh build.
+    far_past = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    far_past_minus_year = datetime(2023, 1, 1, tzinfo=timezone.utc)
 
     # ============================================================
     # Fixture 1 — VALID 3-level chain (leaf <- int <- root).
@@ -276,36 +285,35 @@ def main() -> None:
     (out_dir / "badsig_leaf.der").write_bytes(der(bs_leaf))
 
     # ============================================================
-    # Fixture 3 — EXPIRED INTERMEDIATE. Build a root + int + leaf,
-    # but the intermediate's notAfter is one day before today (the
-    # kernel uses the build-time epoch floor `SPHRAGIS_BUILD_UNIX`,
-    # which equals build-host wall-clock at compile time, so an
-    # intermediate that expired one day before today will be
-    # comfortably in the "expired" window for any near-future
-    # build).
+    # Fixture 3 — EXPIRED INTERMEDIATE. The intermediate's notAfter
+    # is set to 2024-01-01 — comfortably before the build.rs floor
+    # of 2026-01-01, so the kernel's `now_unix()` is guaranteed to
+    # be greater than this cert's notAfter regardless of how stale
+    # the binary is. The chain walk should flag the intermediate as
+    # Expired. (See `validity` comment in `verify_chain` for the
+    # rationale on constant-cost abort.)
     # ============================================================
     e_root, e_root_key = build_self_signed_root(
         "Sphragis x509-selftest Expired Root",
-        not_before=one_year_ago,
+        not_before=far_past_minus_year,
         not_after=five_years_ahead,
     )
     e_int, e_int_key = build_intermediate(
         "Sphragis x509-selftest Expired Intermediate",
         e_root, e_root_key,
-        not_before=one_year_ago,
-        # Expired one day before "now".
-        not_after=one_day_ago,
+        not_before=far_past_minus_year,
+        # Expired comfortably before any plausible build-time clock.
+        not_after=far_past,
     )
-    # Leaf with normal validity dates; the chain walk should
-    # nonetheless flag the intermediate as Expired.
+    # Leaf with validity inside the intermediate's window so the
+    # cryptography library accepts the chain construction. The
+    # validator should NEVER reach the leaf's date check — it will
+    # short-circuit at the intermediate's Expired flag.
     e_leaf, _ = build_leaf(
         "Sphragis x509-selftest Expired-IntChain Leaf",
         e_int, e_int_key,
-        # Leaf notBefore must be < e_int notAfter so the cryptography
-        # library accepts the chain construction. We pick a date
-        # comfortably inside the intermediate's validity window.
-        not_before=one_year_ago,
-        not_after=one_day_ago - timedelta(seconds=1),
+        not_before=far_past_minus_year,
+        not_after=far_past - timedelta(seconds=1),
     )
 
     (out_dir / "expired_root.der").write_bytes(der(e_root))
