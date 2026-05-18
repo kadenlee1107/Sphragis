@@ -32,3 +32,11 @@ and draft ACT 3 cold-pitches file first (most concrete targets per
 charter).
 
 STATUS: IN_PROGRESS
+
+## 2026-05-18 00:05 — outreach
+
+Drafted ACT 3 cold-pitches → `docs/superpowers/outreach/2026-05-17-act3-cold-pitches.md`. 3 emails: AIS (lead — Rome NY, largest ACT 3 sub), CNF (R&D-pilot flexibility angle), Global InfoTek (ML-host / isolation framing). Each email has tailored ¶2 capability bullets + tailored ¶3 ask. Paragraph 1 follows the common template per source brief; paragraphs 2+3 fully tailored. Cited Capability Brief, marketing site, public GitHub. Founder signature blocks left for Kaden to fill (per Capability Brief §7 "Founder action").
+
+Inbox poll (to-outreach.md): no new messages. Next: VC cold-pitches file.
+
+STATUS: IN_PROGRESS
