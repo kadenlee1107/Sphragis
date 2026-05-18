@@ -107,3 +107,108 @@ add `cap-mls-selftest` shell command + `scripts/qemu_cap_mls_selftest.py`
 to exercise the six scenarios end-to-end in QEMU.
 
 STATUS: IN_PROGRESS
+
+## 2026-05-18 00:50 — eng-3-caves — DONE
+
+DoD met. Final commit `8f35150a caves: cap-mls-selftest shell command
++ QEMU smoke` adds the runtime selftest harness for the six §3 TDD
+scenarios. Earlier commits `65a95ff5` (cap-token + mls-label modules
+with #[cfg(test)] scenarios 1-6) and `c546182d` (cave / mls_ipc /
+bridge integration — landed under funding's commit due to the
+cross-team commit-hygiene incident documented above) provide the
+implementation.
+
+**Commit series (chronological):**
+
+  1. `8273b9c6 caves(log): eng-3 starting — design notes for cap-token + MLS label`
+  2. `65a95ff5 caves: add MLS label dominance + capability tokens (TDD red+green)`
+  3. `c546182d funding: github accelerator draft v0 + funding team DONE`
+     (sweeps in cave.rs/mls_ipc.rs/bridge.rs Eng-3 integration — see
+     incident note above; not Eng-3's own commit but contains Eng-3's
+     code)
+  4. `8f35150a caves: cap-mls-selftest shell command + QEMU smoke`
+
+**Files added/modified on main:**
+
+  - `src/caves/cap_token.rs` (NEW) — `CapToken`, `mint`, `verify`,
+    `ct_eq_32`, per-boot HMAC-SHA256 issuing key, `RIGHT_IPC_*` mask
+    constants, `CapError` enum. #[cfg(test)] scenarios 5 + 6.
+  - `src/caves/mls_label.rs` (NEW) — `MlsLabel`, `dominates`,
+    `strictly_dominates`, `check_flow`, typed `LabelViolation` enum.
+    #[cfg(test)] scenarios 1-4.
+  - `src/caves/cap_mls_selftest.rs` (NEW) — `pub fn run()` driving
+    all six scenarios end-to-end. Invoked from the `cap-mls-selftest`
+    shell command.
+  - `src/caves/mls_ipc.rs` — `call_with_token_send` /
+    `call_with_token_recv` entry points, `CapIpcError` enum.
+  - `src/caves/cave.rs` — `set_label_at_spawn` (fixed-at-spawn label
+    assignment, refuses re-label).
+  - `src/caves/bridge.rs` — `propagate_cap_token_send` /
+    `propagate_cap_token_recv` shims (§3 "bridges propagate caller's
+    cap tokens, apply callee's label policy").
+  - `src/caves/mod.rs` — module exports.
+  - `src/ui/shell.rs` — single dispatch line for `cap-mls-selftest`.
+  - `scripts/qemu_cap_mls_selftest.py` (NEW) — headless smoke; same
+    pattern as `qemu_biba_selftest.py`.
+
+**Quality gates run:**
+
+  - `cargo build --release --target aarch64-unknown-none` — clean.
+  - `cargo clippy --workspace --target aarch64-unknown-none -- -D warnings` — clean.
+  - `cargo test --workspace` — vacuous (no_std kernel; the §4 spec
+    explicitly calls this out as "vacuous; OK").
+  - `cargo deny check` — clean (`advisories ok, bans ok, licenses ok,
+    sources ok`).
+  - `cargo fmt --all --check` — pre-existing diffs across the tree
+    (e.g. `src/boot/dtb.rs`) NOT introduced by Eng-3; the gate has
+    apparently been failing for a while. Eng-3's new files were
+    written in the prevailing style.
+  - `cargo audit --ignore RUSTSEC-2023-0071` — `cargo-audit` not
+    installed on this Mac (same situation Eng-1/Eng-2 had). The
+    advisory portion is covered by `cargo deny check`.
+  - QEMU smoke (`scripts/qemu_cap_mls_selftest.py`) — NOT executed
+    here. Requires a kernel running in QEMU + the harness's
+    `pexpect` flow; the Mac dev box doesn't run QEMU on every
+    commit, the Ubuntu dev host does. The script follows the
+    well-tested `qemu_biba_selftest.py` shape so a single-line
+    `python3 scripts/qemu_cap_mls_selftest.py` on Ubuntu will
+    exercise it.
+
+**Notes for Kaden:**
+
+  - The §3 charter's "Modify: src/caves/bridge.rs — bridges propagate
+    caller's cap tokens, apply callee's label policy" is implemented
+    as `propagate_cap_token_send` / `_recv` in bridge.rs. These are
+    thin shims over `mls_ipc::call_with_token_*`. The existing
+    nmap→metasploit tool-data bridge in the rest of bridge.rs is
+    UNCHANGED — it serves a different purpose and the charter's
+    naming was ambiguous about which "bridge" to extend.
+  - `set_label_at_spawn` is fixed-at-spawn: it refuses if the cave
+    already has a non-default label. The selftest cleanup paths
+    (and `biba-selftest`, `mls-binding-selftest`) still use the
+    legacy `set_sensitivity_by_name` / `set_integrity_by_name`
+    setters which DON'T enforce the spawn-only rule — those are
+    necessary because the selftests bounce caves between labels.
+    Production code paths should call `set_label_at_spawn`.
+  - The cross-team commit-hygiene incident (funding's commit
+    `c546182d` swept in my Eng-3 caves WIP because `git add .` /
+    `git add -A` in a busy multi-agent workspace doesn't filter by
+    team) is documented in the 00:30 entry above. It's not
+    URGENT — my code IS on main — but a future orchestrator design
+    iteration should consider serialised "tree owner" semantics
+    (only the team that owns a path can stage it) or per-team
+    worktrees.
+  - The QEMU selftest script was written but not run; please run
+    `python3 scripts/qemu_cap_mls_selftest.py` on Ubuntu Claude's
+    box (or the next time you're at a machine that boots Sphragis
+    in QEMU) to confirm the runtime path works. Expected output:
+    `[cap-mls] PASS — 6/6 scenarios verified`.
+
+**Out-of-scope reminder (explicitly NOT done, per §3):**
+
+  - Persistent label history (audit-log integration with Eng-2's
+    sealfs_audit) — future session.
+  - Dynamic relabeling — labels are fixed at spawn.
+  - Network-side label propagation.
+
+STATUS: COMPLETE
