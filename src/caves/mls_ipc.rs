@@ -385,3 +385,116 @@ pub fn drain(cave_id: u16) -> usize {
     }
     n
 }
+
+// ── §3 cap-token + MLS-label entry point ──
+//
+// `send`/`recv` above already gate both lattices, but the §3 charter
+// asks for a single combined entry point that:
+//
+//   1. Verifies a capability token (issuer-bound, MAC-protected) for
+//      the (caller, callee, op) tuple — see `cap_token::verify`.
+//   2. Enforces the typed `mls_label::check_flow` over the two
+//      caves' current labels, returning `Err(LabelViolation::ReadUp)`
+//      / `Err(LabelViolation::WriteUp)` for the §3 named scenarios.
+//   3. Calls `send`/`recv` exactly as before once both checks pass.
+//
+// This is the function call sites should prefer when they have a
+// minted token; the legacy `send`/`recv` keep working for code that
+// doesn't yet thread tokens (kernel-internal admin paths, the
+// existing biba-selftest).
+
+use crate::caves::cap_token::{self, CapError, CapToken, RIGHT_IPC_READ, RIGHT_IPC_WRITE};
+use crate::caves::mls_label::{check_flow, LabelViolation, MlsLabel};
+
+/// Combined failure type for the cap-token + label IPC path. Each
+/// variant maps to one of the three layers: token authorisation,
+/// label policy, or the underlying mailbox operation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CapIpcError {
+    /// Capability-token check failed (forged MAC, wrong binding, or
+    /// missing rights).
+    Cap(CapError),
+    /// MLS label policy denied the flow (the §3 charter scenarios).
+    Label(LabelViolation),
+    /// Underlying mailbox error (e.g. `BadId`, `Empty`, `TooLong`).
+    Ipc(MlsIpcError),
+}
+
+impl From<CapError>       for CapIpcError { fn from(e: CapError)       -> Self { CapIpcError::Cap(e) } }
+impl From<LabelViolation> for CapIpcError { fn from(e: LabelViolation) -> Self { CapIpcError::Label(e) } }
+impl From<MlsIpcError>    for CapIpcError { fn from(e: MlsIpcError)    -> Self { CapIpcError::Ipc(e) } }
+
+/// Send `body` from `sender_id` to `receiver_id` under the
+/// authority of `token`. The token's `holder_cave` must equal
+/// `sender_id`, its `target_cave` must equal `receiver_id`, and
+/// it must carry `RIGHT_IPC_WRITE`. The MLS labels on the two
+/// caves must additionally permit the write.
+///
+/// Returns:
+///   * `Ok(n)` — n bytes queued.
+///   * `Err(Cap(_))` — token failed verification.
+///   * `Err(Label(WriteUp))` — Biba *-integrity violation
+///     (subject integrity below object integrity).
+///   * `Err(Label(WriteDown))` — Bell-LaPadula *-property
+///     violation (subject sensitivity above object sensitivity).
+///   * `Err(Ipc(_))` — underlying mailbox error.
+pub fn call_with_token_send(
+    token:       &CapToken,
+    sender_id:   u16,
+    receiver_id: u16,
+    body:        &[u8],
+) -> Result<usize, CapIpcError> {
+    // 1. Cap-token check first. Verifying BEFORE the label lookup
+    // means a forged token never gets to probe cave state.
+    cap_token::verify(token, sender_id, receiver_id, RIGHT_IPC_WRITE)?;
+    // 2. Label policy.
+    let subject = MlsLabel::of_cave(sender_id);
+    let object  = MlsLabel::of_cave(receiver_id);
+    check_flow(&subject, &object, MlsOp::Write)?;
+    // 3. The legacy `send` will redo both axes — that's intentional
+    // defence in depth. The §3 entry point still surfaces typed
+    // LabelViolation, but the legacy mailbox keeps its own counters.
+    let n = send(sender_id, receiver_id, body)?;
+    Ok(n)
+}
+
+/// Receive the oldest message in `receiver_id`'s inbox under the
+/// authority of `token`. Token's `holder_cave` must equal
+/// `receiver_id`, its `target_cave` must equal the *sender*
+/// the receiver is expecting (today: the cave that minted the token),
+/// and it must carry `RIGHT_IPC_READ`. The MLS labels must permit
+/// the read.
+///
+/// `expected_sender` is the cave the receiver expects the queued
+/// message to originate from — required so the cap-token's
+/// `target_cave` binding can verify. If the queued message's
+/// sender doesn't match, the call returns `Err(Cap(TargetMismatch))`
+/// rather than delivering a message from the wrong principal.
+///
+/// Returns `Ok((sender_id, sensitivity_byte, copied_len))` on
+/// success — same shape as the legacy `recv`.
+pub fn call_with_token_recv(
+    token:           &CapToken,
+    receiver_id:     u16,
+    expected_sender: u16,
+    out:             &mut [u8],
+) -> Result<(u16, u8, usize), CapIpcError> {
+    // 1. Cap-token check. Holder=receiver, target=expected_sender.
+    cap_token::verify(token, receiver_id, expected_sender, RIGHT_IPC_READ)?;
+    // 2. Label policy. Read is `subject` (receiver) >= `object`
+    // (the message's source cave on the BLP axis; the integrity
+    // axis is checked the other way around — see mls_label).
+    let subject = MlsLabel::of_cave(receiver_id);
+    let object  = MlsLabel::of_cave(expected_sender);
+    check_flow(&subject, &object, MlsOp::Read)?;
+    // 3. Underlying mailbox read. The pre-existing send/recv path
+    // also checks the message's stamped sensitivity at delivery
+    // time (runtime-elevation guard) — keep that.
+    let (sender, sens, n) = recv(receiver_id, out)?;
+    // 4. Belt-and-suspenders: the queued message's sender must
+    // match what the token authorised.
+    if sender != expected_sender {
+        return Err(CapIpcError::Cap(CapError::TargetMismatch));
+    }
+    Ok((sender, sens, n))
+}

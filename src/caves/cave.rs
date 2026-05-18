@@ -416,6 +416,51 @@ pub fn set_integrity_by_name(name: &str, level: Integrity) -> Result<(), &'stati
     Err("no such cave")
 }
 
+/// Set BOTH MLS axes for a cave **once**, at spawn time. The §3
+/// charter ("Caves capability tokens + MLS labels") names this
+/// path: a cave gets a label when it spawns and can NOT be
+/// re-labeled afterwards — labels are part of the cave's identity
+/// for the MLS-IPC + cap-token machinery's binding checks.
+///
+/// Returns:
+///   * `Ok(())` — the cave's `sensitivity` was at the default
+///     `Unclassified` AND `integrity` was at `Untrusted`. Both
+///     are now stored.
+///   * `Err("cave: label already set")` — the cave already carries
+///     a non-default label (a re-label attempt is rejected, which
+///     is the "fixed afterward" property).
+///   * `Err("no such cave")` — name doesn't resolve.
+///
+/// The existing `set_sensitivity_by_name` / `set_integrity_by_name`
+/// are kept for selftest cleanup paths and the admin shell. They
+/// deliberately do NOT carry the spawn-only restriction because
+/// the selftest fixtures need to bounce caves between labels.
+/// Production caller paths should prefer `set_label_at_spawn`.
+pub fn set_label_at_spawn(
+    name: &str,
+    sensitivity: Sensitivity,
+    integrity:   Integrity,
+) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if (*core::ptr::addr_of!(CAVES))[i].state != CaveState::Free
+                && (*core::ptr::addr_of!(CAVES))[i].name_str() == name
+            {
+                let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
+                if cave.sensitivity != Sensitivity::Unclassified as u8
+                    || cave.integrity != Integrity::Untrusted as u8
+                {
+                    return Err("cave: label already set");
+                }
+                cave.sensitivity = sensitivity as u8;
+                cave.integrity   = integrity   as u8;
+                return Ok(());
+            }
+        }
+    }
+    Err("no such cave")
+}
+
 /// Look up the NetMode of a specific cave by id. Falls back to
 /// `Isolated` for an out-of-range or empty cave slot.
 pub fn net_mode_of(cave_id: u16) -> NetMode {

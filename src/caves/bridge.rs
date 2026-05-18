@@ -17,6 +17,15 @@
 //   - URLs (full HTTP/HTTPS URLs)
 //   - Credentials (username:password pairs)
 //   - Vulnerabilities (CVE + description + severity)
+//
+// 2026-05-17 (Eng-3 caves push): added the cross-cave cap-token
+// propagation shim near the bottom of the file. The §3 charter
+// asks for "bridges propagate caller's cap tokens, apply callee's
+// label policy" — the existing tool-data bridge above is not the
+// right shape (tools don't carry caps), so the new
+// `propagate_cap_token_send` / `_recv` pair is added as the
+// canonical cross-cave bridge primitive. Keeps the tool-data
+// machinery untouched.
 
 
 // ─── Standard Intermediate Format ───
@@ -342,4 +351,61 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+// ─── Cross-cave cap-token bridge (gov-grade §3.2) ───
+//
+// The §3 charter asks: "Modify: src/caves/bridge.rs — bridges
+// propagate caller's cap tokens, apply callee's label policy."
+//
+// The thin shim below IS that bridge:
+//   1. Caller mints a `CapToken` bound to (holder=caller,
+//      target=callee, RIGHT_IPC_WRITE).
+//   2. Caller presents the token at `propagate_cap_token_send`.
+//   3. The bridge invokes `mls_ipc::call_with_token_send`, which
+//      verifies the token (authorisation) AND consults the
+//      callee cave's `sensitivity` / `integrity` labels
+//      (policy). Both checks must pass before any data flows.
+//
+// "Apply callee's label policy" is satisfied because
+// `mls_label::check_flow` reads `MlsLabel::of_cave(receiver_id)`
+// — the destination's current labels — and rejects with
+// `LabelViolation::WriteUp` (Biba) or `WriteDown` (BLP) if the
+// flow would taint the higher-integrity destination or
+// declassify a higher-confidentiality destination.
+//
+// Recv is symmetric: caller (which becomes the receiver) holds
+// a token authorising read from `expected_sender`; the bridge
+// invokes `call_with_token_recv` which applies the policy
+// `subject = receiver`, `object = expected_sender`.
+
+use crate::caves::cap_token::CapToken;
+use crate::caves::mls_ipc::{call_with_token_recv, call_with_token_send, CapIpcError};
+
+/// Forward `body` from `sender_id` to `receiver_id` under the
+/// authority of `token`. Returns whatever
+/// `mls_ipc::call_with_token_send` returns — `Cap`/`Label`/`Ipc`
+/// variants distinguish the three failure layers.
+pub fn propagate_cap_token_send(
+    token:       &CapToken,
+    sender_id:   u16,
+    receiver_id: u16,
+    body:        &[u8],
+) -> Result<usize, CapIpcError> {
+    call_with_token_send(token, sender_id, receiver_id, body)
+}
+
+/// Pull the oldest queued message in `receiver_id`'s inbox under
+/// the authority of `token`. `expected_sender` is the cave the
+/// receiver expects the message to originate from — verified
+/// against both the token's `target_cave` binding and the
+/// stamped sender of the queued message. See
+/// `mls_ipc::call_with_token_recv` for details.
+pub fn propagate_cap_token_recv(
+    token:           &CapToken,
+    receiver_id:     u16,
+    expected_sender: u16,
+    out:             &mut [u8],
+) -> Result<(u16, u8, usize), CapIpcError> {
+    call_with_token_recv(token, receiver_id, expected_sender, out)
 }

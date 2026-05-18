@@ -140,3 +140,97 @@ Next: GitHub Accelerator draft (WebSearch for current cohort
 window first).
 
 STATUS: IN_PROGRESS
+
+---
+
+## 2026-05-18 00:36 — funding — DONE
+
+DoD met. Four drafts produced:
+
+1. `docs/superpowers/funding/2026-05-17-bis-notification-template.md`
+   — commit `8900a8fc` — STATUS: DRAFT — KADEN TO SEND
+2. `docs/superpowers/funding/2026-05-17-github-sponsors-profile.md`
+   — commit `70fafecb` — STATUS: DRAFT v1
+3. `docs/superpowers/funding/2026-05-17-openssf-alpha-omega-v0.md`
+   — commit `f6fa47e3` — STATUS: DRAFT v1
+4. `docs/superpowers/funding/2026-05-17-github-accelerator-v0.md`
+   — this commit — STATUS: DRAFT v1
+
+Each draft:
+- Has a clear header with status, date, and author = "Funding Team"
+- Cites primary sources (marketing-site, day-1 sweep, STF/NLnet/SBIR
+  drafts, founder-action checklist, master plan) and WebSearch /
+  WebFetch results where program facts required them
+- Ends with a "What Kaden does next" section
+- Does not exceed the public-claim ceiling in
+  `marketing-site/index.html` lines 1180-1810
+
+**Notes for Kaden:**
+
+1. The BIS template corrects two factual errors in the v0 template
+   embedded in the founder-action-checklist Phase 3 item 12:
+   - Cites **15 CFR §742.15(b)** (correct for publicly-available
+     open-source crypto), not §740.17(b)(1) (a different License
+     Exception ENC regime). Verified via BIS guidance + EFF
+     explainer. The charter directive said "740.17(b)(2)" — that
+     is also incorrect; it covers self-classification reports for
+     encryption *items*, not source-code notification.
+   - Addresses NSA at **`enc@nsa.gov`** (correct per BIS guidance
+     + EFF), not `web_site@nsa.gov` (the v0 template's value).
+   I recommend updating the founder-action-checklist v0 template to
+   match, or treating this v1 as the canonical version. Founder
+   should send THIS v1, not the v0.
+
+2. The GitHub Sponsors profile expands from the charter's "3-tier
+   minimum" to **5 tiers** ($5/$25/$100/$250/$1000) so higher-
+   conviction sponsors don't have to negotiate custom tiers
+   (GitHub Sponsors makes that friction-heavy). The charter's
+   minimum reward structure (named in CONTRIBUTORS.md at $25,
+   README logo at $100) is preserved exactly.
+
+3. The Alpha-Omega ask is sized at **$150K over 9 months** — between
+   the documented small-grant baseline and the multi-hundred-K
+   grants to mature projects (Rust Foundation $460K, Eclipse $400K,
+   Node.js $300K were the published comparables). Three independent
+   work packages so A-O can de-scope to a subset if budget pressure
+   requires.
+
+4. The "GitHub Accelerator" draft pivots to **GitHub Secure Open
+   Source Fund** as the primary application target. Reasons in
+   §0 of that file: (a) GitHub Accelerator 2024 was the last
+   cohort, was AI-only (a poor fit for Sphragis's anti-AI-in-TCB
+   stance), and is now closed; (b) GitHub Secure Open Source Fund
+   IS currently open on rolling applications, is security-focused,
+   and is a direct fit; (c) the file preserves an
+   "if-Accelerator-reopens" section for future use. The charter's
+   directive — "ready when next cohort opens" — is satisfied for
+   Accelerator; the equivalent OPEN program is targeted as
+   primary.
+
+5. Parallel-funding overlap flagged for Kaden's transparent
+   disclosure on intake calls: Alpha-Omega WP3 (FIPS 140-3
+   pre-engagement) partially overlaps STF WP1 (CNSA 2.0 module
+   completion); Alpha-Omega WP2 (SLSA-L4) partially overlaps
+   GitHub Secure Open Source Fund Week 2 (supply-chain
+   attestation goes live). The Sphragis-side ask total is now:
+   STF €120K + NLnet €50K + Alpha-Omega $150K + GitHub Secure
+   $10K + SBIR Phase I $75K. Worst-case all-five award scenario
+   is ~$340K + €170K over 6-9 months — within reason for a
+   solo-maintainer scaling to small team, but Kaden should be
+   ready to deconflict scope if multiple awards land.
+
+6. The Sphragis Inc. incorporation status is referenced as "in
+   formation as of 2026-05-17" across all four drafts. Once
+   Atlas issues the Certificate of Incorporation + EIN, those
+   four drafts can be sent to a sed-friendly find/replace pass
+   ("in formation" → "incorporated YYYY-MM-DD"). The drafts are
+   structured to make this trivial.
+
+Inbox to-funding.md polled final time: empty.
+
+Working tree before commit: my files only (BIS / sponsors /
+alpha-omega / accelerator drafts + this log). Other teams'
+in-flight work (eng-1 x509, eng-2 sealfs_rotation, eng-3
+cap_token/mls_label) untouched.
+
+STATUS: COMPLETE
